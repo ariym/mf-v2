@@ -31,3 +31,20 @@ go.work.sum
 # Editor/IDE
 # .idea/
 # .vscode/
+
+# Local mf runtime artifacts
+/mf
+/mf.yaml
+*.db
+*.db-wal
+*.db-shm
+*.sqlite
+*.sqlite-wal
+*.sqlite-shm
+*.sqlite3
+*.sqlite3-wal
+*.sqlite3-shm
+*.mf/
+*.log
+/dist/
+__pycache__/

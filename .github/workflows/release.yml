@@ -1,0 +1,59 @@
+name: Release
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Validate release tag
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          if [[ ! "$RELEASE_TAG" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]; then
+            echo 'Release tags must be stable versions such as v0.1.0.' >&2
+            exit 1
+          fi
+      - name: Install FFmpeg for tests
+        run: sudo apt-get update && sudo apt-get install -y ffmpeg
+      - run: sh -n scripts/install.sh
+      - run: python3 -m unittest discover -s scripts -p 'test_*.py'
+      - run: go test ./...
+      - run: go vet ./...
+      - name: Build executables and checksums
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+          CGO_ENABLED: '0'
+        run: |
+          mkdir -p dist
+          version=${RELEASE_TAG#v}
+          for platform in darwin linux; do
+            for architecture in amd64 arm64; do
+              asset="mf-$platform-$architecture"
+              GOOS="$platform" GOARCH="$architecture" go build -trimpath \
+                -ldflags "-s -w -X github.com/ariym/mf-v2/internal/config.Version=$version" \
+                -o "dist/$asset" ./cmd/mf
+              (cd dist && sha256sum "$asset" > "$asset.sha256")
+            done
+          done
+      - name: Publish release after all assets are uploaded
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          gh release create "$RELEASE_TAG" dist/* --verify-tag --draft \
+            --title "$RELEASE_TAG" --generate-notes
+          gh release edit "$RELEASE_TAG" --draft=false --latest
