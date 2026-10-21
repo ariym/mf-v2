@@ -49,3 +49,5 @@ go.work.sum
 /dist/
 /mf_modules/
 __pycache__/
+
+.DS_Store
