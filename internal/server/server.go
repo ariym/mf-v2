@@ -47,7 +47,7 @@ func Run(ctx context.Context, c config.Config, instance string, out io.Writer) e
 	}
 	defer control.Close()
 	logger := slog.New(slog.NewTextHandler(out, nil))
-	engine, e := jobs.New(s, filepath.Dir(c.Path), logger)
+	engine, e := jobs.New(s, filepath.Dir(c.Path), logger, c.ModulesPath)
 	if e != nil {
 		return e
 	}
@@ -84,7 +84,7 @@ func Run(ctx context.Context, c config.Config, instance string, out io.Writer) e
 		jsonResponse(w, 200, map[string]bool{"stopping": true})
 		stopOnce.Do(func() { close(stop) })
 	})
-	api := &http.Server{Handler: API(c, s, engine), ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 15 * time.Second, WriteTimeout: 30 * time.Second, IdleTimeout: 60 * time.Second, BaseContext: func(net.Listener) context.Context { return ctx }}
+	api := &http.Server{Handler: API(c, s, engine), ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 15 * time.Second, IdleTimeout: 60 * time.Second, BaseContext: func(net.Listener) context.Context { return ctx }}
 	ctrl := &http.Server{Handler: cm, ReadHeaderTimeout: 2 * time.Second}
 	errs := make(chan error, 2)
 	go func() { errs <- api.Serve(listener) }()

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"net/url"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -20,16 +21,19 @@ var Version = "0.1.0"
 const MissingMessage = "No local mf.yaml file found. include flag ‘--config=/path/to/mf.yaml’ or ‘run mf init’ to create a new mf.yaml in the current directory."
 
 type Config struct {
-	AppName    string `yaml:"app_name" json:"app_name"`
-	MFVersion  string `yaml:"mf_version" json:"mf_version"`
-	ServerIP   string `yaml:"server_ip" json:"server_ip"`
-	ServerPort int    `yaml:"server_port" json:"server_port"`
-	SQLitePath string `yaml:"sqlite_path" json:"sqlite_path"`
-	Path       string `yaml:"-" json:"-"`
+	AppName     string       `yaml:"app_name" json:"app_name"`
+	MFVersion   string       `yaml:"mf_version" json:"mf_version"`
+	ServerIP    string       `yaml:"server_ip" json:"server_ip"`
+	ServerPort  int          `yaml:"server_port" json:"server_port"`
+	SQLitePath  string       `yaml:"sqlite_path" json:"sqlite_path"`
+	HubURL      string       `yaml:"hub_url" json:"hub_url"`
+	ModulesPath string       `yaml:"modules_path" json:"modules_path"`
+	SQLToFFmpeg RenderConfig `yaml:"sql_to_ffmpeg" json:"sql_to_ffmpeg"`
+	Path        string       `yaml:"-" json:"-"`
 }
 
 func Defaults() Config {
-	return Config{AppName: "mf-processor", MFVersion: Version, ServerIP: "localhost", ServerPort: 11747, SQLitePath: "mf.db"}
+	return Config{AppName: "mf-processor", MFVersion: Version, ServerIP: "localhost", ServerPort: 11747, SQLitePath: "mf.db", HubURL: "http://127.0.0.1:11748", ModulesPath: "mf_modules", SQLToFFmpeg: DefaultRender()}
 }
 func ConfigPath(path string) (string, error) {
 	if path == "" {
@@ -51,6 +55,9 @@ func Load(path string) (Config, error) {
 		return Config{}, fmt.Errorf("read config %s: %w", abs, err)
 	}
 	var c Config
+	c.HubURL = Defaults().HubURL
+	c.ModulesPath = Defaults().ModulesPath
+	c.SQLToFFmpeg = DefaultRender()
 	d := yaml.NewDecoder(bytes.NewReader(b))
 	d.KnownFields(true)
 	if err = d.Decode(&c); err != nil {
@@ -71,6 +78,9 @@ func Load(path string) (Config, error) {
 		c.SQLitePath = filepath.Join(filepath.Dir(abs), c.SQLitePath)
 	}
 	c.SQLitePath = filepath.Clean(c.SQLitePath)
+	if !filepath.IsAbs(c.ModulesPath) {
+		c.ModulesPath = filepath.Join(filepath.Dir(abs), c.ModulesPath)
+	}
 	// Existing symlink aliases must share the same daemon lock and database.
 	if resolved, e := filepath.EvalSymlinks(c.SQLitePath); e == nil {
 		c.SQLitePath = resolved
@@ -92,6 +102,18 @@ func (c Config) Validate() error {
 	}
 	if strings.TrimSpace(c.SQLitePath) == "" {
 		return fmt.Errorf("sqlite_path must not be empty")
+	}
+	if c.HubURL != "" {
+		u, e := url.Parse(c.HubURL)
+		if e != nil || u.Hostname() == "" || u.User != nil || u.RawQuery != "" || u.Fragment != "" || (u.Scheme != "http" && u.Scheme != "https") {
+			return fmt.Errorf("hub_url must be an absolute HTTP(S) URL without credentials, query, or fragment")
+		}
+	}
+	if c.ModulesPath == "" {
+		return fmt.Errorf("modules_path must not be empty")
+	}
+	if err := c.SQLToFFmpeg.Validate(); err != nil {
+		return err
 	}
 	return nil
 }

@@ -2,6 +2,7 @@
 package jobs
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
 	"encoding/json"
@@ -30,13 +31,19 @@ import (
 var ErrStopping = errors.New("server is stopping")
 
 type Engine struct {
-	gate     *gate
-	Worker   *worker.Worker
-	Registry *flows.Registry
-	client   *client.Client
-	db       *sql.DB
-	cancel   context.CancelFunc
-	done     chan error
+	gate        *gate
+	Worker      *worker.Worker
+	Registry    *flows.Registry
+	client      *client.Client
+	db          *sql.DB
+	cancel      context.CancelFunc
+	done        chan error
+	store       *store.Store
+	base        string
+	dbPath      string
+	excludeDirs []string
+	activeMu    sync.Mutex
+	active      map[string]context.CancelFunc
 }
 type gate struct {
 	backend.Backend
@@ -80,7 +87,7 @@ func (g *gate) CompleteWorkflowTask(ctx context.Context, t *backend.WorkflowTask
 }
 
 // New requires the caller to hold the exclusive database server lock.
-func New(s *store.Store, base string, logger *slog.Logger) (*Engine, error) {
+func New(s *store.Store, base string, logger *slog.Logger, moduleRoots ...string) (*Engine, error) {
 	// No previous server can still own these leases while the process lock is held.
 	if _, e := s.DB.Exec("UPDATE instances SET locked_until=NULL,sticky_until=NULL; UPDATE activities SET locked_until=NULL;"); e != nil {
 		return nil, e
@@ -96,7 +103,24 @@ func New(s *store.Store, base string, logger *slog.Logger) (*Engine, error) {
 	w := worker.New(g, &opts)
 	r := flows.New(w, ctx)
 	engine := &Engine{gate: g, Worker: w, Registry: r, client: client.New(g), db: s.DB, cancel: cancel, done: make(chan error, 1)}
-	importer := &media.Importer{Store: s}
+	engine.store = s
+	engine.base = base
+	engine.excludeDirs = moduleRoots
+	if len(engine.excludeDirs) == 0 {
+		engine.excludeDirs = []string{filepath.Join(base, "mf_modules")}
+	}
+	engine.active = map[string]context.CancelFunc{}
+	var seq int
+	var dbName string
+	if err := s.DB.QueryRow("PRAGMA database_list").Scan(&seq, &dbName, &engine.dbPath); err != nil {
+		cancel()
+		return nil, err
+	}
+	if err := engine.registerDownloaded(); err != nil {
+		cancel()
+		return nil, err
+	}
+	importer := &media.Importer{Store: s, ExcludeDirs: engine.excludeDirs}
 	if e := r.RegisterActivity("import_media_files", func(ctx context.Context, input ImportInput) (media.Summary, error) {
 		summary, e := importer.Import(ctx, input.Path)
 		if e != nil {
@@ -148,6 +172,9 @@ func (e *Engine) Start() error {
 	ctx, cancel := context.WithCancel(context.Background())
 	old := e.cancel
 	e.cancel = func() { cancel(); old() }
+	if err := e.reconcile(context.Background()); err != nil {
+		return err
+	}
 	if err := e.Worker.Start(ctx); err != nil {
 		e.cancel()
 		return err
@@ -156,18 +183,17 @@ func (e *Engine) Start() error {
 	return nil
 }
 func (e *Engine) Submit(ctx context.Context, name string, input json.RawMessage) (string, error) {
+	if name == downloadedFlowName {
+		return "", &InputError{fmt.Errorf("reserved flow name")}
+	}
+	if !e.Registry.Has(name) {
+		return e.submitDownloaded(ctx, name, input, nil, nil)
+	}
 	normalized, err := e.Registry.Prepare(name, input)
 	if err != nil {
 		return "", &InputError{err}
 	}
-	e.gate.mu.Lock()
-	defer e.gate.mu.Unlock()
-	if e.gate.stopping {
-		return "", ErrStopping
-	}
-	id := uuid.NewString()
-	_, err = e.client.CreateWorkflowInstance(ctx, client.WorkflowInstanceOptions{InstanceID: id}, name, normalized)
-	return id, err
+	return e.persistCompiled(ctx, uuid.NewString(), name, normalized)
 }
 
 type InputError struct{ error }
@@ -202,12 +228,16 @@ func (e *Engine) Wait(ctx context.Context) error {
 func (e *Engine) Abort() { e.gate.mu.Lock(); e.gate.stopping = true; e.cancel(); e.gate.mu.Unlock() }
 
 type Job struct {
-	ID          string  `json:"id"`
-	State       string  `json:"state"`
-	Result      any     `json:"result,omitempty"`
-	Error       string  `json:"error,omitempty"`
-	CreatedAt   string  `json:"created_at"`
-	CompletedAt *string `json:"completed_at"`
+	ID              string   `json:"id"`
+	State           string   `json:"state"`
+	Result          any      `json:"result,omitempty"`
+	Error           string   `json:"error,omitempty"`
+	CreatedAt       string   `json:"created_at"`
+	CompletedAt     *string  `json:"completed_at"`
+	Flow            string   `json:"flow,omitempty"`
+	FlowVersion     int      `json:"flow_version,omitempty"`
+	Paths           []string `json:"paths,omitempty"`
+	CancelRequested bool     `json:"cancel_requested,omitempty"`
 }
 
 func (e *Engine) Get(ctx context.Context, id string) (Job, error) {
@@ -217,6 +247,9 @@ func (e *Engine) Get(ctx context.Context, id string) (Job, error) {
 	var started bool
 	err := e.db.QueryRowContext(ctx, "SELECT execution_id,state,created_at,completed_at,"+startedPredicate+" FROM instances i WHERE id=? AND parent_instance_id IS NULL ORDER BY created_at DESC LIMIT 1", id).Scan(&execution, &state, &j.CreatedAt, &j.CompletedAt, &started)
 	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return e.pending(ctx, id)
+		}
 		return j, err
 	}
 	j.State = "queued"
@@ -225,11 +258,38 @@ func (e *Engine) Get(ctx context.Context, id string) (Job, error) {
 	}
 	if state == int(core.WorkflowInstanceStateFinished) || state == int(core.WorkflowInstanceStateContinuedAsNew) {
 		j.State = "completed"
-		j.Result, err = client.GetWorkflowResult[any](ctx, e.client, core.NewWorkflowInstance(id, execution), time.Second)
+		var raw json.RawMessage
+		raw, err = client.GetWorkflowResult[json.RawMessage](ctx, e.client, core.NewWorkflowInstance(id, execution), time.Second)
+		if err == nil {
+			decoder := json.NewDecoder(bytes.NewReader(raw))
+			decoder.UseNumber()
+			err = decoder.Decode(&j.Result)
+		}
 		if err != nil {
 			j.State = "failed"
+			if errors.Is(err, client.ErrWorkflowCanceled) {
+				j.State = "cancelled"
+			}
 			j.Error = err.Error()
 		}
+	}
+	var paths, terminal string
+	metaErr := e.db.QueryRowContext(ctx, "SELECT flow_key,flow_version,paths,cancel_requested,coalesce(terminal_state,'') FROM job_metadata WHERE id=?", id).Scan(&j.Flow, &j.FlowVersion, &paths, &j.CancelRequested, &terminal)
+	if metaErr == nil {
+		if err = json.Unmarshal([]byte(paths), &j.Paths); err != nil {
+			return j, err
+		}
+		if j.CancelRequested && (terminal == "cancelled" || j.State == "failed") {
+			j.State = "cancelled"
+		}
+		if j.State == "completed" || j.State == "failed" || j.State == "cancelled" {
+			_, err = e.db.ExecContext(ctx, "UPDATE job_metadata SET terminal_state=? WHERE id=?", j.State, id)
+			if err != nil {
+				return j, err
+			}
+		}
+	} else if !errors.Is(metaErr, sql.ErrNoRows) {
+		return j, metaErr
 	}
 	return j, nil
 }

@@ -18,6 +18,7 @@ type Audio struct {
 	ModifiedAt  string `json:"modified_at"`
 }
 type Video struct {
+	AttachedPic bool     `json:"attached_pic,omitempty"`
 	ID          int64    `json:"id"`
 	MediaFileID int64    `json:"media_file_id"`
 	StreamIndex int      `json:"stream_index"`

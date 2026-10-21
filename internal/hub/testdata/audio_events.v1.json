@@ -1,0 +1,103 @@
+{
+  "key": "audio_events",
+  "version": 1,
+  "title": "Detected sound regions",
+  "desc": "Detected sound regions with original upstream data and processing provenance.",
+  "data_type": "json",
+  "format": {
+    "schema": {
+      "type": "object",
+      "required": [
+        "operation",
+        "events",
+        "media",
+        "options",
+        "raw"
+      ],
+      "properties": {
+        "operation": {
+          "type": "string"
+        },
+        "events": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": [
+              "duration",
+              "sampling_rate",
+              "sample_width",
+              "channels"
+            ],
+            "properties": {
+              "start": {
+                "type": [
+                  "number",
+                  "null"
+                ]
+              },
+              "end": {
+                "type": [
+                  "number",
+                  "null"
+                ]
+              },
+              "duration": {
+                "type": "number"
+              },
+              "sampling_rate": {
+                "type": "integer"
+              },
+              "sample_width": {
+                "type": "integer"
+              },
+              "channels": {
+                "type": "integer"
+              },
+              "audio": {
+                "type": "object"
+              },
+              "metadata": {
+                "type": "object"
+              }
+            },
+            "additionalProperties": true
+          }
+        },
+        "media": {
+          "type": "object",
+          "required": [
+            "path",
+            "sha256"
+          ],
+          "properties": {
+            "path": {
+              "type": "string"
+            },
+            "sha256": {
+              "type": "string",
+              "pattern": "^[a-f0-9]{64}$"
+            },
+            "stream_index": {
+              "type": "integer"
+            },
+            "probe": {
+              "type": "object"
+            },
+            "normalized": {
+              "type": "object"
+            }
+          },
+          "additionalProperties": true
+        },
+        "options": {
+          "type": "object"
+        },
+        "raw": {
+          "type": "object"
+        }
+      },
+      "additionalProperties": true,
+      "$schema": "https://json-schema.org/draft/2020-12/schema"
+    }
+  }
+}

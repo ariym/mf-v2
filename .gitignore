@@ -47,4 +47,5 @@ go.work.sum
 *.mf/
 *.log
 /dist/
+/mf_modules/
 __pycache__/

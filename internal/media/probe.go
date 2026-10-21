@@ -154,7 +154,7 @@ func (p Probe) File(ctx context.Context, path string) (store.Media, error) {
 			if fps == nil {
 				fps = rate(s.RFrameRate)
 			}
-			m.Video = append(m.Video, store.Video{StreamIndex: s.Index, Width: positive(s.Width), Height: positive(s.Height), FPS: fps, Codec: s.Codec})
+			m.Video = append(m.Video, store.Video{AttachedPic: s.Disposition.AttachedPic != 0, StreamIndex: s.Index, Width: positive(s.Width), Height: positive(s.Height), FPS: fps, Codec: s.Codec})
 			if s.Disposition.AttachedPic == 0 {
 				m.MediaType = "video"
 			}

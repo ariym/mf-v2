@@ -1,0 +1,101 @@
+{
+  "key": "speech",
+  "version": 2,
+  "title": "Complete transcript and alignment",
+  "desc": "Complete transcript and alignment with original upstream data and processing provenance.",
+  "data_type": "json",
+  "format": {
+    "schema": {
+      "type": "object",
+      "required": [
+        "transcript",
+        "raw",
+        "media"
+      ],
+      "properties": {
+        "transcript": {
+          "type": "object",
+          "properties": {
+            "text": {
+              "type": "string"
+            },
+            "language": {
+              "type": "string"
+            },
+            "segments": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "text": {
+                    "type": "string"
+                  },
+                  "start": {
+                    "type": "number"
+                  },
+                  "end": {
+                    "type": "number"
+                  },
+                  "words": {
+                    "type": "array"
+                  },
+                  "chars": {
+                    "type": [
+                      "array",
+                      "null"
+                    ]
+                  },
+                  "speaker": {
+                    "type": "string"
+                  }
+                },
+                "additionalProperties": true
+              }
+            },
+            "word_segments": {
+              "type": "array"
+            }
+          },
+          "additionalProperties": true
+        },
+        "raw": {
+          "type": "object"
+        },
+        "media": {
+          "type": "object",
+          "required": [
+            "path",
+            "sha256"
+          ],
+          "properties": {
+            "path": {
+              "type": "string"
+            },
+            "sha256": {
+              "type": "string",
+              "pattern": "^[a-f0-9]{64}$"
+            },
+            "stream_index": {
+              "type": "integer"
+            },
+            "probe": {
+              "type": "object"
+            },
+            "normalized": {
+              "type": "object"
+            }
+          },
+          "additionalProperties": true
+        },
+        "exports": {
+          "type": "array"
+        },
+        "options": {
+          "type": "object"
+        }
+      },
+      "additionalProperties": true,
+      "$schema": "https://json-schema.org/draft/2020-12/schema"
+    }
+  }
+}

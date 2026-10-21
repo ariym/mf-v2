@@ -53,7 +53,7 @@ func TestAPI(t *testing.T) {
 	for _, tc := range []struct {
 		method, path, body string
 		status             int
-	}{{"GET", "/healthz", "", 200}, {"GET", "/api/v1/media", "", 200}, {"GET", "/api/v1/media?limit=0", "", 400}, {"GET", "/api/v1/media/999", "", 404}, {"GET", "/api/v1/media/nope", "", 400}, {"GET", "/api/v1/jobs/missing", "", 404}, {"POST", "/api/v1/jobs", `{"flow":"unknown","input":{}}`, 400}, {"POST", "/api/v1/jobs", `{"flow":"import_media","input":{}}`, 400}, {"POST", "/api/v1/jobs", `{} {}`, 400}, {"POST", "/api/v1/jobs", `{`, 400}, {"GET", "/nope", "", 404}} {
+	}{{"GET", "/healthz", "", 200}, {"GET", "/api/v1/media", "", 200}, {"GET", "/api/v1/media?limit=0", "", 400}, {"GET", "/api/v1/media/999", "", 404}, {"GET", "/api/v1/media/nope", "", 400}, {"GET", "/api/v1/jobs/missing", "", 404}, {"POST", "/api/v1/jobs", `{"flow":"unknown","input":{}}`, 400}, {"POST", "/api/v1/jobs", `{"flow":"import_media","input":{}}`, 400}, {"POST", "/api/v1/jobs", `{} {}`, 400}, {"POST", "/api/v1/jobs", `{`, 400}, {"GET", "/nope", "", 404}, {"GET", "/api/v1/jobs?limit=0", "", 400}, {"GET", "/api/v1/jobs?offset=-1", "", 400}, {"POST", "/api/v1/jobs/missing/cancel", "", 404}, {"POST", "/api/v1/jobs/missing/retry", "", 404}} {
 		w := request(tc.method, tc.path, tc.body)
 		if w.Code != tc.status {
 			t.Fatalf("%s %s: %d %s", tc.method, tc.path, w.Code, w.Body)
@@ -80,6 +80,17 @@ func TestAPI(t *testing.T) {
 			t.Fatal(e)
 		}
 		if j.State == "completed" {
+			if list := request("GET", "/api/v1/jobs?state=completed", ""); list.Code != 200 || !bytes.Contains(list.Body.Bytes(), []byte(created.ID)) {
+				t.Fatalf("job list %d %s", list.Code, list.Body)
+			}
+			if logs := request("GET", "/api/v1/jobs/"+created.ID+"/logs", ""); logs.Code != 200 {
+				t.Fatalf("logs %d %s", logs.Code, logs.Body)
+			}
+			for _, action := range []string{"cancel", "retry"} {
+				if response := request("POST", "/api/v1/jobs/"+created.ID+"/"+action, ""); response.Code != 409 {
+					t.Fatalf("accepted terminal %s", action)
+				}
+			}
 			return
 		}
 		if j.State == "failed" {

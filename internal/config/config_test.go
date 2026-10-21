@@ -57,3 +57,19 @@ func TestDiscoveryUsesWorkingDirectory(t *testing.T) {
 		t.Fatal(e)
 	}
 }
+
+func TestLegacyConfigGetsNewDefaultsAndPartialRenderOverrides(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "mf.yaml")
+	body := "app_name: mf\nserver_ip: localhost\nserver_port: 11747\nsqlite_path: mf.db\nsql_to_ffmpeg:\n  crf: 0\n  width: 1280\n  height: 720\n"
+	if e := os.WriteFile(path, []byte(body), 0600); e != nil {
+		t.Fatal(e)
+	}
+	c, e := Load(path)
+	if e != nil {
+		t.Fatal(e)
+	}
+	if c.HubURL != "http://127.0.0.1:11748" || c.ModulesPath != filepath.Join(dir, "mf_modules") || c.SQLToFFmpeg.CRF != 0 || c.SQLToFFmpeg.FPS != 30 || c.SQLToFFmpeg.Width != 1280 {
+		t.Fatalf("defaults/override %+v", c)
+	}
+}

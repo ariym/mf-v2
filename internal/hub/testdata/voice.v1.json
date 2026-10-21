@@ -1,0 +1,101 @@
+{
+  "key": "voice",
+  "version": 1,
+  "title": "Reusable voice profile",
+  "desc": "Reusable voice profile with original upstream data and processing provenance.",
+  "data_type": "json",
+  "format": {
+    "schema": {
+      "type": "object",
+      "required": [
+        "voice_id",
+        "label",
+        "embedding_space",
+        "embedding",
+        "examples"
+      ],
+      "properties": {
+        "voice_id": {
+          "type": "string"
+        },
+        "label": {
+          "type": "string"
+        },
+        "embedding_space": {
+          "type": "string"
+        },
+        "embedding": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "number"
+          }
+        },
+        "examples": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "object",
+            "required": [
+              "media",
+              "embedding",
+              "raw_embedding",
+              "speech_seconds"
+            ],
+            "properties": {
+              "media": {
+                "type": "object",
+                "required": [
+                  "path",
+                  "sha256"
+                ],
+                "properties": {
+                  "path": {
+                    "type": "string"
+                  },
+                  "sha256": {
+                    "type": "string",
+                    "pattern": "^[a-f0-9]{64}$"
+                  },
+                  "stream_index": {
+                    "type": "integer"
+                  },
+                  "probe": {
+                    "type": "object"
+                  },
+                  "normalized": {
+                    "type": "object"
+                  }
+                },
+                "additionalProperties": true
+              },
+              "embedding": {
+                "type": "array",
+                "minItems": 1,
+                "items": {
+                  "type": "number"
+                }
+              },
+              "raw_embedding": {
+                "type": "array",
+                "minItems": 1,
+                "items": {
+                  "type": "number"
+                }
+              },
+              "speech_seconds": {
+                "type": "number"
+              }
+            },
+            "additionalProperties": true
+          }
+        },
+        "preprocessing": {
+          "type": "object"
+        }
+      },
+      "additionalProperties": true,
+      "$schema": "https://json-schema.org/draft/2020-12/schema"
+    }
+  }
+}

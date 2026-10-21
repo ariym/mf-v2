@@ -1,32 +1,35 @@
 name: Release
 on:
   push:
+    branches: [release]
     tags: ['v*']
 
 permissions:
   contents: write
 
 concurrency:
-  group: release-${{ github.ref }}
+  group: mf-release
   cancel-in-progress: false
+  queue: max
 
 jobs:
   release:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
           cache: true
-      - name: Validate release tag
+      - name: Select release version
         env:
-          RELEASE_TAG: ${{ github.ref_name }}
+          REF_TYPE: ${{ github.ref_type }}
+          REF_NAME: ${{ github.ref_name }}
         run: |
-          if [[ ! "$RELEASE_TAG" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]; then
-            echo 'Release tags must be stable versions such as v0.1.0.' >&2
-            exit 1
-          fi
+          release_tag=$(python3 scripts/release_version.py "$REF_TYPE" "$REF_NAME")
+          echo "RELEASE_TAG=$release_tag" >> "$GITHUB_ENV"
       - name: Install FFmpeg for tests
         run: sudo apt-get update && sudo apt-get install -y ffmpeg
       - run: sh -n scripts/install.sh
@@ -35,7 +38,6 @@ jobs:
       - run: go vet ./...
       - name: Build executables and checksums
         env:
-          RELEASE_TAG: ${{ github.ref_name }}
           CGO_ENABLED: '0'
         run: |
           mkdir -p dist
@@ -49,11 +51,25 @@ jobs:
               (cd dist && sha256sum "$asset" > "$asset.sha256")
             done
           done
+          cp scripts/install.sh dist/install.sh
       - name: Publish release after all assets are uploaded
         env:
           GH_TOKEN: ${{ github.token }}
-          RELEASE_TAG: ${{ github.ref_name }}
         run: |
-          gh release create "$RELEASE_TAG" dist/* --verify-tag --draft \
-            --title "$RELEASE_TAG" --generate-notes
+          # Reserve the tag before making a draft, so a failed upload cannot
+          # let a later commit reuse the draft's version for different code.
+          if ! git show-ref --verify --quiet "refs/tags/$RELEASE_TAG"; then
+            git tag "$RELEASE_TAG" "$GITHUB_SHA"
+            git push origin "refs/tags/$RELEASE_TAG"
+          fi
+          if gh release view "$RELEASE_TAG" --json isDraft --jq .isDraft > release-is-draft; then
+            if [[ "$(cat release-is-draft)" == false ]]; then
+              echo "Release $RELEASE_TAG is already published."
+              exit 0
+            fi
+            gh release upload "$RELEASE_TAG" dist/* --clobber
+          else
+            gh release create "$RELEASE_TAG" dist/* --verify-tag --draft \
+              --title "$RELEASE_TAG" --generate-notes
+          fi
           gh release edit "$RELEASE_TAG" --draft=false --latest

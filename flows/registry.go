@@ -79,6 +79,7 @@ func (r *Registry) Prepare(name string, input json.RawMessage) (json.RawMessage,
 	}
 	return input, nil
 }
+func (r *Registry) Has(name string) bool { _, ok := r.definitions[name]; return ok }
 func ActivityOptions() workflow.ActivityOptions {
 	return workflow.ActivityOptions{RetryOptions: workflow.RetryOptions{MaxAttempts: 3, FirstRetryInterval: time.Second, MaxRetryInterval: 5 * time.Second, BackoffCoefficient: 2}}
 }

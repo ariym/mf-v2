@@ -1,0 +1,194 @@
+{
+  "key": "speaker",
+  "version": 2,
+  "title": "Speaker turns and identity matches",
+  "desc": "Speaker turns and identity matches with original upstream data and processing provenance.",
+  "data_type": "json",
+  "format": {
+    "schema": {
+      "type": "object",
+      "required": [
+        "diarization",
+        "exclusive_diarization",
+        "embeddings",
+        "media",
+        "raw"
+      ],
+      "properties": {
+        "diarization": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": [
+              "start",
+              "end",
+              "speaker"
+            ],
+            "properties": {
+              "start": {
+                "type": "number"
+              },
+              "end": {
+                "type": "number"
+              },
+              "speaker": {
+                "type": "string"
+              },
+              "track": {}
+            },
+            "additionalProperties": true
+          }
+        },
+        "exclusive_diarization": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": [
+              "start",
+              "end",
+              "speaker"
+            ],
+            "properties": {
+              "start": {
+                "type": "number"
+              },
+              "end": {
+                "type": "number"
+              },
+              "speaker": {
+                "type": "string"
+              },
+              "track": {}
+            },
+            "additionalProperties": true
+          }
+        },
+        "embeddings": {
+          "type": "object",
+          "additionalProperties": {
+            "oneOf": [
+              {
+                "type": "array",
+                "minItems": 1,
+                "items": {
+                  "type": "number"
+                }
+              },
+              {
+                "type": "object",
+                "required": [
+                  "artifact",
+                  "sha256",
+                  "dtype",
+                  "shape"
+                ],
+                "properties": {
+                  "artifact": {
+                    "type": "string"
+                  },
+                  "sha256": {
+                    "type": "string",
+                    "pattern": "^[a-f0-9]{64}$"
+                  },
+                  "dtype": {
+                    "type": "string"
+                  },
+                  "shape": {
+                    "type": "array",
+                    "items": {
+                      "type": "integer",
+                      "minimum": 0
+                    }
+                  }
+                },
+                "additionalProperties": false
+              }
+            ]
+          }
+        },
+        "embedding_space": {
+          "type": "string"
+        },
+        "media": {
+          "type": "object",
+          "required": [
+            "path",
+            "sha256"
+          ],
+          "properties": {
+            "path": {
+              "type": "string"
+            },
+            "sha256": {
+              "type": "string",
+              "pattern": "^[a-f0-9]{64}$"
+            },
+            "stream_index": {
+              "type": "integer"
+            },
+            "probe": {
+              "type": "object"
+            },
+            "normalized": {
+              "type": "object"
+            }
+          },
+          "additionalProperties": true
+        },
+        "raw": {
+          "type": "object"
+        },
+        "matches": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "object",
+            "required": [
+              "voice_id",
+              "candidates",
+              "threshold"
+            ],
+            "properties": {
+              "voice_id": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "threshold": {
+                "type": "number"
+              },
+              "candidates": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "required": [
+                    "voice_id",
+                    "similarity"
+                  ],
+                  "properties": {
+                    "voice_id": {
+                      "type": "string"
+                    },
+                    "label": {
+                      "type": "string"
+                    },
+                    "similarity": {
+                      "type": [
+                        "number",
+                        "null"
+                      ]
+                    }
+                  },
+                  "additionalProperties": true
+                }
+              }
+            },
+            "additionalProperties": true
+          }
+        }
+      },
+      "additionalProperties": true,
+      "$schema": "https://json-schema.org/draft/2020-12/schema"
+    }
+  }
+}

@@ -19,7 +19,7 @@ class InstallTests(unittest.TestCase):
         self.root = Path(self.temporary.name)
         self.bin = self.root / "tools"
         self.bin.mkdir()
-        self.destination = self.root / "install with spaces"
+        self.destination = self.root / "install with spaces and 'quotes'"
         self.temporary_downloads = self.root / "downloads"
         self.temporary_downloads.mkdir()
         self.log = self.root / "requests.jsonl"
@@ -27,6 +27,9 @@ class InstallTests(unittest.TestCase):
                                 GH_TOKEN="fixture-token", MF_INSTALL_DIR=str(self.destination),
                                 TMPDIR=str(self.temporary_downloads), MF_TEST_ROOT=str(self.root),
                                 MF_TEST_OS="Linux", MF_TEST_ARCH="x86_64")
+        self.environment.pop("MF_VERSION", None)
+        self.environment.pop("GITHUB_TOKEN", None)
+        self.executable("gh", "#!/bin/sh\nexit 1\n")
         self.executable("uname", "#!/bin/sh\ncase \"$1\" in -s) printf '%s\\n' \"$MF_TEST_OS\" ;; -m) printf '%s\\n' \"$MF_TEST_ARCH\" ;; esac\n")
         self.executable("curl", f"#!{sys.executable}\n" + '''import json, os, pathlib, sys
 args = sys.argv[1:]
@@ -36,7 +39,7 @@ with (root / "requests.jsonl").open("a") as log:
 if os.environ.get("MF_TEST_DOWNLOAD_FAILURE"):
     sys.exit(22)
 url = args[-1]
-if url.endswith("/releases/latest"):
+if url.endswith("/releases/latest") or url.endswith("/releases/tags/v0.1.0"):
     source = root / "release.json"
 elif url.endswith("/assets/101"):
     source = root / "binary"
@@ -136,6 +139,66 @@ pathlib.Path(args[args.index("-o") + 1]).write_bytes(source.read_bytes())
         requests = [json.loads(line) for line in self.log.read_text().splitlines()]
         self.assertFalse(any("Authorization:" in arg for args in requests for arg in args))
         self.assert_clean()
+
+    def test_pinned_release(self):
+        self.environment["MF_VERSION"] = "v0.1.0"
+        result = self.run_installer()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        requests = [json.loads(line) for line in self.log.read_text().splitlines()]
+        self.assertTrue(requests[0][-1].endswith("/releases/tags/v0.1.0"))
+        self.assertEqual((self.destination / "mf").read_bytes(), BINARY)
+        self.assert_clean()
+
+    def test_invalid_pinned_version_fails_before_network(self):
+        for version in ["0.1.0", "v0.1.0-rc.1", "../../latest", "v01.1.0"]:
+            with self.subTest(version=version):
+                self.environment["MF_VERSION"] = version
+                result = self.run_installer()
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn("MF_VERSION", result.stderr)
+                self.assertFalse(self.log.exists())
+                self.assertFalse(self.destination.exists())
+
+    def test_pinned_release_must_match_response(self):
+        self.environment["MF_VERSION"] = "v0.1.0"
+        release = json.loads((self.root / "release.json").read_text())
+        release["tag_name"] = "v0.1.1"
+        (self.root / "release.json").write_text(json.dumps(release))
+        result = self.run_installer()
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("requested v0.1.0, received v0.1.1", result.stderr)
+        self.assertFalse(self.destination.exists())
+        self.assert_clean()
+
+    def test_draft_and_prerelease_are_rejected(self):
+        for flag in ["draft", "prerelease"]:
+            with self.subTest(flag=flag):
+                self.release("mf-linux-amd64")
+                release = json.loads((self.root / "release.json").read_text())
+                release[flag] = True
+                (self.root / "release.json").write_text(json.dumps(release))
+                result = self.run_installer()
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn("published and stable", result.stderr)
+                self.assertFalse(self.destination.exists())
+                self.assert_clean()
+
+    def test_alternate_credentials(self):
+        self.environment.pop("GH_TOKEN")
+        for source in ["GITHUB_TOKEN", "gh"]:
+            with self.subTest(source=source):
+                if self.log.exists():
+                    self.log.unlink()
+                if source == "GITHUB_TOKEN":
+                    self.environment["GITHUB_TOKEN"] = "alternate-token"
+                else:
+                    self.environment.pop("GITHUB_TOKEN", None)
+                    self.executable("gh", "#!/bin/sh\nprintf alternate-token\n")
+                result = self.run_installer()
+                self.assertEqual(result.returncode, 0, result.stderr)
+                requests = [json.loads(line) for line in self.log.read_text().splitlines()]
+                self.assertTrue(all("Authorization: Bearer alternate-token" in args for args in requests))
+                self.assert_clean()
 
     def test_wrong_checksum_filename_is_rejected(self):
         (self.root / "checksum").write_text(hashlib.sha256(BINARY).hexdigest() + "  another-file\n")

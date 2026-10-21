@@ -316,3 +316,48 @@ func TestStartupFailuresAndForegroundInterrupt(t *testing.T) {
 		t.Fatalf("invalid bind: %v %s", e, out)
 	}
 }
+
+func TestClientCLIAnnotationsRenderingAndPathJobs(t *testing.T) {
+	if _, e := exec.LookPath("ffmpeg"); e != nil {
+		t.Skip("FFmpeg unavailable")
+	}
+	f := newFixture(t)
+	audio := filepath.Join(f.dir, "audio.wav")
+	if out, e := exec.Command("ffmpeg", "-v", "error", "-f", "lavfi", "-i", "sine=frequency=440:duration=1", "-c:a", "pcm_s16le", audio).CombinedOutput(); e != nil {
+		t.Fatalf("fixture: %v %s", e, out)
+	}
+	definition := filepath.Join(f.dir, "confidence.json")
+	if e := os.WriteFile(definition, []byte(`{"key":"confidence","version":1,"data_type":"number","format":{"range":[0,1]}}`), 0600); e != nil {
+		t.Fatal(e)
+	}
+	f.must(t, "tagtypes", "add", definition)
+	segment := strings.TrimSpace(f.must(t, "segments", "add", audio, "00:00:00.1", "00:00:00.6"))
+	tag := strings.TrimSpace(f.must(t, "tags", "add", "confidence@1", "--segment", segment, "--value", "0.9"))
+	if !strings.Contains(f.must(t, "tags", "show", tag), `"tag_type_key": "confidence"`) {
+		t.Fatal("wrong tag terminology")
+	}
+	rendered := filepath.Join(f.dir, "render.mp3")
+	out := f.must(t, "sql-to-ffmpeg", "SELECT * FROM segments ORDER BY id", "--output", rendered, "--print-only")
+	if !strings.Contains(out, "libmp3lame") {
+		t.Fatalf("wrong command %s", out)
+	}
+	if _, e := os.Stat(rendered); !os.IsNotExist(e) {
+		t.Fatal("print-only rendered output")
+	}
+	f.must(t, "sql-to-ffmpeg", "SELECT * FROM segments ORDER BY id", "--output", rendered)
+	f.must(t, "programs", "link", "echo", "/bin/echo")
+	if out = f.must(t, "programs", "exec", "echo", "--", "passthrough"); strings.TrimSpace(out) != "passthrough" {
+		t.Fatalf("program passthrough %s", out)
+	}
+	// This starts the daemon implicitly, and compiled imports remain path-filterable.
+	out = f.must(t, "jobs", "run", "import_media", audio, "--wait")
+	if !strings.Contains(out, `"state": "completed"`) {
+		t.Fatalf("job %s", out)
+	}
+	out = f.must(t, "jobs", "list", audio)
+	if !strings.Contains(out, `"flow": "import_media"`) {
+		t.Fatalf("path jobs %s", out)
+	}
+	f.must(t, "daemon", "stop")
+	f.must(t, "migrate")
+}

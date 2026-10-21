@@ -1,5 +1,7 @@
 # Custom Go flows
 
+For downloaded, standalone Go flows from mf-hub, see [hub integration](hub.md). They execute through a generic subprocess activity and need no rebuild or runtime Go plugin loading. The instructions below remain the extension point for workflows compiled into `mf` itself.
+
 `flows.Registry` registers compiled workflows and activities with the embedded `go-workflows` worker. See the compilable two-activity example in `examples/flows/flows.go`.
 
 To enable it, import the example and server packages in `cmd/mf/main.go`:
@@ -49,4 +51,4 @@ Keep filesystem access, subprocesses, database operations, network calls, random
 
 Registered activity contexts are canceled during server shutdown. Use context-aware I/O and `exec.CommandContext`; do not swallow cancellation or start unmanaged background work. Forced shutdown deliberately leaves interrupted activities uncheckpointed so they can execute again after restart. The worker and HTTP server have a bounded shutdown window.
 
-Workflow and activity names and argument shapes form a persisted contract. Do not rename or incompatibly change them while unfinished instances exist. Finish old runs or retain their registered implementations when deploying a new binary. This bootstrap has no runtime plugin loader or automated workflow-code migration.
+Workflow and activity names and argument shapes form a persisted contract. Do not rename or incompatibly change them while unfinished instances exist. Finish old runs or retain their registered implementations when deploying a new binary. There is no runtime Go plugin loader or automated workflow-code migration. Downloaded flows retain exact executable/dependency snapshots for unfinished jobs.

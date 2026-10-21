@@ -50,13 +50,14 @@ func New(in io.Reader, out, errOut io.Writer) *cobra.Command {
 	root.AddCommand(initCmd)
 	version := &cobra.Command{Use: "version", Short: "Print executable version", Args: cobra.NoArgs, PersistentPreRunE: func(*cobra.Command, []string) error { return nil }, Run: func(cmd *cobra.Command, _ []string) { fmt.Fprintln(cmd.OutOrStdout(), config.Version) }}
 	root.AddCommand(version)
+	root.AddCommand(newUpdateCommand())
 	add := &cobra.Command{Use: "add <file-or-directory>", Short: "Recursively probe and import local media", Args: cobra.ExactArgs(1), RunE: func(cmd *cobra.Command, args []string) error {
 		s, e := store.Open(c.SQLitePath)
 		if e != nil {
 			return e
 		}
 		defer s.Close()
-		result, e := (&media.Importer{Store: s}).Import(cmd.Context(), args[0])
+		result, e := (&media.Importer{Store: s, ExcludeDirs: []string{c.ModulesPath}}).Import(cmd.Context(), args[0])
 		fmt.Fprintf(cmd.OutOrStdout(), "Added: %d, updated: %d, skipped: %d, failed: %d\n", result.Added, result.Updated, result.Skipped, result.Failed)
 		for _, failure := range result.Errors {
 			fmt.Fprintln(cmd.ErrOrStderr(), failure)
@@ -88,6 +89,7 @@ func New(in io.Reader, out, errOut io.Writer) *cobra.Command {
 	}}
 	child.Flags().StringVar(&instance, "instance", "", "startup identity")
 	root.AddCommand(child)
+	addClientCommands(root, &c, &configPath)
 	return root
 }
 func initialize(path string, yes bool, in io.Reader, out io.Writer) error {

@@ -4,8 +4,10 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
+	"path/filepath"
 	"strconv"
 
 	"github.com/ariym/mf-v2/internal/config"
@@ -75,6 +77,7 @@ func API(c config.Config, s *store.Store, j *jobs.Engine) http.Handler {
 		var body struct {
 			Flow  string          `json:"flow"`
 			Input json.RawMessage `json:"input"`
+			Paths []string        `json:"paths,omitempty"`
 		}
 		d := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20))
 		d.DisallowUnknownFields()
@@ -87,7 +90,13 @@ func API(c config.Config, s *store.Store, j *jobs.Engine) http.Handler {
 			apiError(w, 400, errors.New("expected one JSON object"))
 			return
 		}
-		id, e := j.Submit(r.Context(), body.Flow, body.Input)
+		var id string
+		var e error
+		if body.Paths != nil {
+			id, e = j.SubmitPaths(r.Context(), body.Flow, body.Input, body.Paths)
+		} else {
+			id, e = j.Submit(r.Context(), body.Flow, body.Input)
+		}
 		if e != nil {
 			var input *jobs.InputError
 			status := 500
@@ -102,6 +111,78 @@ func API(c config.Config, s *store.Store, j *jobs.Engine) http.Handler {
 		}
 		w.Header().Set("Location", "/api/v1/jobs/"+id)
 		jsonResponse(w, 202, map[string]string{"id": id})
+	})
+	mux.HandleFunc("GET /api/v1/jobs", func(w http.ResponseWriter, r *http.Request) {
+		limit, offset := 100, 0
+		var e error
+		if v := r.URL.Query().Get("limit"); v != "" {
+			limit, e = strconv.Atoi(v)
+		}
+		if e != nil || limit < 1 || limit > 1000 {
+			apiError(w, 400, fmt.Errorf("limit must be between 1 and 1000"))
+			return
+		}
+		if v := r.URL.Query().Get("offset"); v != "" {
+			offset, e = strconv.Atoi(v)
+		}
+		if e != nil || offset < 0 {
+			apiError(w, 400, fmt.Errorf("offset must be nonnegative"))
+			return
+		}
+		path := r.URL.Query().Get("path")
+		if path != "" && !filepath.IsAbs(path) {
+			path = filepath.Join(filepath.Dir(c.Path), path)
+		}
+		items, e := j.List(r.Context(), path, r.URL.Query().Get("state"), limit, offset)
+		if e != nil {
+			apiError(w, 500, e)
+			return
+		}
+		jsonResponse(w, 200, map[string]any{"items": items, "limit": limit, "offset": offset})
+	})
+	mux.HandleFunc("POST /api/v1/jobs/{id}/cancel", func(w http.ResponseWriter, r *http.Request) {
+		if e := j.CancelJob(r.Context(), r.PathValue("id")); e != nil {
+			status := 409
+			if errors.Is(e, sql.ErrNoRows) {
+				status = 404
+			}
+			apiError(w, status, e)
+			return
+		}
+		jsonResponse(w, 200, map[string]bool{"cancel_requested": true})
+	})
+	mux.HandleFunc("POST /api/v1/jobs/{id}/retry", func(w http.ResponseWriter, r *http.Request) {
+		id, e := j.Retry(r.Context(), r.PathValue("id"))
+		if e != nil {
+			status := 409
+			if errors.Is(e, sql.ErrNoRows) {
+				status = 404
+			}
+			apiError(w, status, e)
+			return
+		}
+		jsonResponse(w, 202, map[string]string{"id": id})
+	})
+	mux.HandleFunc("GET /api/v1/jobs/{id}/logs", func(w http.ResponseWriter, r *http.Request) {
+		offset := int64(0)
+		var e error
+		if v := r.URL.Query().Get("offset"); v != "" {
+			offset, e = strconv.ParseInt(v, 10, 64)
+		}
+		if e != nil || offset < 0 {
+			apiError(w, 400, fmt.Errorf("offset must be nonnegative"))
+			return
+		}
+		data, e := j.Logs(r.Context(), r.PathValue("id"), offset)
+		if e != nil {
+			status := 500
+			if errors.Is(e, sql.ErrNoRows) {
+				status = 404
+			}
+			apiError(w, status, e)
+			return
+		}
+		jsonResponse(w, 200, map[string]any{"data": string(data), "next_offset": offset + int64(len(data))})
 	})
 	mux.HandleFunc("GET /api/v1/jobs/{id}", func(w http.ResponseWriter, r *http.Request) {
 		job, e := j.Get(r.Context(), r.PathValue("id"))

@@ -1,5 +1,5 @@
 #!/bin/sh
-# Install the latest stable GitHub release for this OS and architecture.
+# Install the latest stable GitHub release, or the tag selected by MF_VERSION.
 set -eu
 
 main() {
@@ -26,6 +26,14 @@ main() {
 
     repository=ariym/mf-v2
     asset="mf-$platform-$architecture"
+    release_version=${MF_VERSION:-latest}
+    if [ "$release_version" != latest ]; then
+        python3 -c 'import re, sys; sys.exit(0 if re.fullmatch(r"v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)", sys.argv[1]) else "mf installer: MF_VERSION must be a stable tag such as v0.1.0.")' "$release_version"
+    fi
+    GH_TOKEN=${GH_TOKEN:-${GITHUB_TOKEN:-}}
+    if [ -z "$GH_TOKEN" ] && command -v gh >/dev/null 2>&1; then
+        GH_TOKEN=$(gh auth token --hostname github.com 2>/dev/null || true)
+    fi
     install_dir=${MF_INSTALL_DIR:-"${HOME:?HOME must be set}/.local/bin"}
     temporary_dir=''
     staged_file=''
@@ -34,26 +42,32 @@ main() {
     trap 'exit 143' TERM
     temporary_dir=$(mktemp -d "${TMPDIR:-/tmp}/mf-install.XXXXXX")
 
-    printf 'Finding the latest release for %s/%s...\n' "$platform" "$architecture"
-    if ! download "https://api.github.com/repos/$repository/releases/latest" application/vnd.github+json "$temporary_dir/release.json"; then
-        fail "Cannot fetch the latest release. Check that a release is published and, for this private repository, GH_TOKEN has Contents read access."
+    release_endpoint=latest
+    if [ "$release_version" != latest ]; then release_endpoint="tags/$release_version"; fi
+    printf 'Finding release %s for %s/%s...\n' "$release_version" "$platform" "$architecture"
+    if ! download "https://api.github.com/repos/$repository/releases/$release_endpoint" application/vnd.github+json "$temporary_dir/release.json"; then
+        fail "Cannot fetch the release. Check that a release is published and GH_TOKEN/GITHUB_TOKEN or gh auth login has Contents read access for private repositories."
     fi
 
     # Resolve both assets from one release response so a new release appearing
     # during installation cannot mix a binary and checksum from different tags.
-    python3 - "$temporary_dir" "$asset" "$repository" <<'PY'
+    python3 - "$temporary_dir" "$asset" "$repository" "$release_version" <<'PY'
 import json
 from pathlib import Path
 import re
 import sys
 
-folder, asset, repository = sys.argv[1:]
+folder, asset, repository, requested_version = sys.argv[1:]
 folder = Path(folder)
 try:
     release = json.loads((folder / "release.json").read_text())
     version = release.get("tag_name", "")
     if not re.fullmatch(r"v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)", version):
-        raise ValueError("latest release must have a stable vMAJOR.MINOR.PATCH tag")
+        raise ValueError("release must have a stable vMAJOR.MINOR.PATCH tag")
+    if release.get("draft") or release.get("prerelease"):
+        raise ValueError("release must be published and stable")
+    if requested_version != "latest" and version != requested_version:
+        raise ValueError(f"requested {requested_version}, received {version}")
     assets = {entry["name"]: entry for entry in release["assets"]}
     for name, output in ((asset, "binary-url"), (asset + ".sha256", "checksum-url")):
         entry = assets.get(name)

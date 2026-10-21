@@ -1,0 +1,13 @@
+{
+  "key": "diarized_transcript",
+  "version": 2,
+  "title": "Diarized transcript",
+  "desc": "Full speech and speaker schemas.",
+  "data_type": "tag_set",
+  "format": {
+    "tags": {
+      "speaker": 2,
+      "speech": 2
+    }
+  }
+}

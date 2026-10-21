@@ -17,14 +17,18 @@ type Summary struct {
 	Skipped int      `json:"skipped"`
 	Failed  int      `json:"failed"`
 	Errors  []string `json:"errors,omitempty"`
+	// MediaIDs describes this scan, not all historical catalog rows. It stays
+	// internal so durable import results retain their existing wire shape.
+	MediaIDs []int64 `json:"-"`
 }
 type PartialError struct{ Count int }
 
 func (e *PartialError) Error() string { return fmt.Sprintf("%d file(s) failed to import", e.Count) }
 
 type Importer struct {
-	Store *store.Store
-	Probe Probe
+	Store       *store.Store
+	Probe       Probe
+	ExcludeDirs []string
 }
 
 func (i *Importer) Import(ctx context.Context, path string) (Summary, error) {
@@ -43,6 +47,17 @@ func (i *Importer) Import(ctx context.Context, path string) (Summary, error) {
 	info, e := os.Stat(abs)
 	if e != nil {
 		return result, e
+	}
+	excluded := map[string]bool{}
+	for _, dir := range i.ExcludeDirs {
+		canonical, err := filepath.Abs(dir)
+		if err != nil {
+			return result, err
+		}
+		if resolved, err := filepath.EvalSymlinks(canonical); err == nil {
+			canonical = resolved
+		}
+		excluded[canonical] = true
 	}
 	seen := map[string]bool{}
 	databasePath, e := i.storePath(ctx)
@@ -107,6 +122,12 @@ func (i *Importer) Import(ctx context.Context, path string) (Summary, error) {
 			failed(path, e)
 			return nil
 		}
+		var id int64
+		if e = i.Store.DB.QueryRowContext(ctx, "SELECT id FROM media_files WHERE file_path=?", canonical).Scan(&id); e != nil {
+			failed(path, e)
+			return nil
+		}
+		result.MediaIDs = append(result.MediaIDs, id)
 		if added {
 			result.Added++
 		} else {
@@ -127,7 +148,7 @@ func (i *Importer) Import(ctx context.Context, path string) (Summary, error) {
 				return nil
 			}
 			if d.IsDir() {
-				if path == databasePath+".mf" {
+				if path == databasePath+".mf" || (path != abs && excluded[path]) {
 					return filepath.SkipDir
 				}
 				return nil
