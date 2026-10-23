@@ -1,11 +1,16 @@
 """Exercise the piped installer without network calls or writes outside a temp dir."""
+import errno
 import hashlib
 import json
 import os
 from pathlib import Path
+import pty
+import select
+import signal
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 
 INSTALLER = Path(__file__).with_name("install.sh")
@@ -23,12 +28,16 @@ class InstallTests(unittest.TestCase):
         self.temporary_downloads = self.root / "downloads"
         self.temporary_downloads.mkdir()
         self.log = self.root / "requests.jsonl"
+        self.home = self.root / "home"
+        self.home.mkdir()
         self.environment = dict(os.environ, PATH=str(self.bin) + os.pathsep + os.environ["PATH"],
                                 GH_TOKEN="fixture-token", MF_INSTALL_DIR=str(self.destination),
+                                HOME=str(self.home), SHELL="/bin/zsh",
                                 TMPDIR=str(self.temporary_downloads), MF_TEST_ROOT=str(self.root),
                                 MF_TEST_OS="Linux", MF_TEST_ARCH="x86_64")
         self.environment.pop("MF_VERSION", None)
         self.environment.pop("GITHUB_TOKEN", None)
+        self.environment.pop("ZDOTDIR", None)
         self.executable("gh", "#!/bin/sh\nexit 1\n")
         self.executable("uname", "#!/bin/sh\ncase \"$1\" in -s) printf '%s\\n' \"$MF_TEST_OS\" ;; -m) printf '%s\\n' \"$MF_TEST_ARCH\" ;; esac\n")
         self.executable("curl", f"#!{sys.executable}\n" + '''import json, os, pathlib, sys
@@ -66,7 +75,49 @@ pathlib.Path(args[args.index("-o") + 1]).write_bytes(source.read_bytes())
 
     def run_installer(self):
         return subprocess.run(["sh"], input=INSTALLER.read_text(), text=True,
-                              capture_output=True, env=self.environment, timeout=15)
+                              capture_output=True, env=self.environment, timeout=15,
+                              start_new_session=True)
+
+    def run_interactive(self, answer="\n"):
+        """Exercise a curl-style pipe with a separate controlling terminal."""
+        environment = dict(self.environment, MF_TEST_INSTALLER=str(INSTALLER.resolve()))
+        pid, terminal = pty.fork()
+        if pid == 0:
+            try:
+                os.execve("/bin/sh", ["sh", "-c", 'cat "$MF_TEST_INSTALLER" | sh'], environment)
+            finally:
+                os._exit(127)
+        output = bytearray()
+        status = None
+        replied = False
+        deadline = time.monotonic() + 15
+        try:
+            while time.monotonic() < deadline:
+                ready, _, _ = select.select([terminal], [], [], 0.2)
+                if not ready:
+                    continue
+                try:
+                    chunk = os.read(terminal, 65536)
+                except OSError as error:
+                    if error.errno != errno.EIO:
+                        raise
+                    break
+                if not chunk:
+                    break
+                output.extend(chunk)
+                if b"(Y/n) " in output and not replied:
+                    os.write(terminal, answer.encode())
+                    replied = True
+            else:
+                self.fail("installer timed out: " + output.decode(errors="replace"))
+            _, status = os.waitpid(pid, 0)
+        finally:
+            os.close(terminal)
+            if status is None:
+                os.killpg(pid, signal.SIGKILL)
+                os.waitpid(pid, 0)
+        return subprocess.CompletedProcess("piped installer", os.waitstatus_to_exitcode(status),
+                                           output.decode(errors="replace").replace("\r\n", "\n"))
 
     def assert_clean(self):
         self.assertEqual(list(self.temporary_downloads.iterdir()), [])
@@ -215,6 +266,87 @@ pathlib.Path(args[args.index("-o") + 1]).write_bytes(source.read_bytes())
         self.assertIn("mf installer:", result.stderr)
         self.assertFalse(self.destination.exists())
         self.assert_clean()
+
+    def test_noninteractive_install_does_not_modify_shell_settings(self):
+        result = self.run_installer()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("Add " + str(self.destination) + " to your PATH", result.stdout)
+        self.assertNotIn("(Y/n)", result.stdout)
+        self.assertEqual(list(self.home.iterdir()), [])
+
+    def test_default_yes_adds_safe_zsh_path_once(self):
+        profile = self.home / ".zshrc"
+        profile.write_text("# existing settings without a trailing newline")
+        self.environment.pop("GH_TOKEN")
+        for _ in range(2):
+            result = self.run_interactive()
+            self.assertEqual(result.returncode, 0, result.stdout)
+            self.assertIn("Would you like to automatically add 'mf' to your PATH? (Y/n)", result.stdout)
+            self.assertIn("Open a new terminal", result.stdout)
+        saved = profile.read_text()
+        self.assertTrue(saved.startswith("# existing settings without a trailing newline\n"))
+        self.assertEqual(saved.count("# Added by mf installer"), 1)
+        # Source twice to verify safe quoting and avoid repeated PATH entries.
+        shell = subprocess.run(["sh", "-c", '. "$1"; . "$1"; command -v mf; printf "%s\\n" "$PATH"', "sh", str(profile)],
+                               env=self.environment, text=True, capture_output=True, timeout=5)
+        self.assertEqual(shell.returncode, 0, shell.stderr)
+        lines = shell.stdout.splitlines()
+        self.assertEqual(lines[0], str(self.destination / "mf"))
+        self.assertEqual(lines[1].split(os.pathsep).count(str(self.destination)), 1)
+        self.assert_clean()
+
+    def test_declining_path_setup_preserves_profile(self):
+        profile = self.home / ".zshrc"
+        profile.write_text("# keep this unchanged")
+        result = self.run_interactive("n\n")
+        self.assertEqual(result.returncode, 0, result.stdout)
+        self.assertIn("(Y/n)", result.stdout)
+        self.assertEqual(profile.read_text(), "# keep this unchanged")
+        self.assertTrue((self.destination / "mf").exists())
+
+    def test_existing_path_skips_prompt(self):
+        self.environment["PATH"] += os.pathsep + str(self.destination)
+        result = self.run_interactive()
+        self.assertEqual(result.returncode, 0, result.stdout)
+        self.assertNotIn("(Y/n)", result.stdout)
+        self.assertEqual(list(self.home.iterdir()), [])
+
+    def test_bash_configures_interactive_and_login_shells(self):
+        self.environment["SHELL"] = "/bin/bash"
+        profile = self.home / ".bash_profile"
+        profile.write_text("# existing login settings\n")
+        result = self.run_interactive("Y\n")
+        self.assertEqual(result.returncode, 0, result.stdout)
+        self.assertTrue(profile.read_text().startswith("# existing login settings\n"))
+        for path in [profile, self.home / ".bashrc"]:
+            self.assertIn("# Added by mf installer", path.read_text())
+        self.assertFalse((self.home / ".profile").exists())
+
+    def test_zsh_respects_zdotdir(self):
+        folder = self.home / "custom zsh config"
+        self.environment["ZDOTDIR"] = str(folder)
+        result = self.run_interactive("yes\n")
+        self.assertEqual(result.returncode, 0, result.stdout)
+        self.assertIn("# Added by mf installer", (folder / ".zshrc").read_text())
+        self.assertFalse((self.home / ".zshrc").exists())
+
+    def test_unsupported_shell_keeps_successful_installation(self):
+        self.environment["SHELL"] = "/bin/unknown-shell"
+        result = self.run_interactive()
+        self.assertEqual(result.returncode, 0, result.stdout)
+        self.assertIn("not supported", result.stdout)
+        self.assertIn("PATH manually", result.stdout)
+        self.assertTrue((self.destination / "mf").exists())
+        self.assertEqual(list(self.home.iterdir()), [])
+
+    def test_unwritable_profile_keeps_successful_installation(self):
+        # A directory in place of the file reliably fails even when tests run as root.
+        (self.home / ".zshrc").mkdir()
+        result = self.run_interactive()
+        self.assertEqual(result.returncode, 0, result.stdout)
+        self.assertIn("Could not update shell startup files", result.stdout)
+        self.assertIn("PATH manually", result.stdout)
+        self.assertTrue((self.destination / "mf").exists())
 
 
 if __name__ == "__main__":

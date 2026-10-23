@@ -35,6 +35,7 @@ main() {
         GH_TOKEN=$(gh auth token --hostname github.com 2>/dev/null || true)
     fi
     install_dir=${MF_INSTALL_DIR:-"${HOME:?HOME must be set}/.local/bin"}
+    install_dir=$(python3 -c 'import os, sys; print(os.path.abspath(sys.argv[1]))' "$install_dir")
     temporary_dir=''
     staged_file=''
     trap cleanup 0
@@ -109,8 +110,70 @@ PY
     printf 'Installed mf %s to %s/mf\n' "$(cat "$temporary_dir/version")" "$install_dir"
     case ":${PATH:-}:" in
         *":$install_dir:"*) ;;
-        *) printf 'Add %s to your PATH to run mf from any directory.\n' "$install_dir" ;;
+        *) offer_path_setup ;;
     esac
+}
+
+offer_path_setup() {
+    # stdin contains the piped installer. Ask through the controlling terminal
+    # instead, and leave unattended installs usable without waiting for input.
+    if [ -z "${HOME:-}" ] || ! ( : </dev/tty ) 2>/dev/null; then
+        printf 'Add %s to your PATH to run mf from any directory.\n' "$install_dir"
+        return
+    fi
+    printf "\nWould you like to automatically add 'mf' to your PATH? (Y/n) "
+    if ! IFS= read -r answer </dev/tty; then answer=n; fi
+    case "$answer" in
+        ''|[Yy]|[Yy][Ee][Ss]) ;;
+        *) printf 'Add %s to your PATH to run mf from any directory.\n' "$install_dir"; return ;;
+    esac
+
+    if ! python3 - "$install_dir" "$platform" <<'PY'
+import os
+from pathlib import Path
+import shlex
+import sys
+
+directory, platform = sys.argv[1:]
+home = Path(os.environ["HOME"])
+shell = Path(os.environ.get("SHELL", "")).name
+if shell == "zsh":
+    profiles = [Path(os.environ.get("ZDOTDIR") or home) / ".zshrc"]
+elif shell == "bash":
+    login_profiles = [home / name for name in (".bash_profile", ".bash_login", ".profile")]
+    login = next((path for path in login_profiles if path.exists()),
+                 home / (".bash_profile" if platform == "darwin" else ".profile"))
+    profiles = [home / ".bashrc", login]
+elif shell in ("sh", "dash", "ksh"):
+    profiles = [home / ".profile"]
+else:
+    sys.exit(f"Automatic PATH setup is not supported for {shell or 'an unknown shell'}.")
+
+quoted = shlex.quote(directory)
+block = ("# Added by mf installer\n"
+         f'case ":$PATH:" in\n'
+         f"    *:{quoted}:*) ;;\n"
+         f'    *) export PATH={quoted}:"$PATH" ;;\n'
+         "esac\n")
+try:
+    for profile in profiles:
+        previous = profile.read_text() if profile.exists() else ""
+        if block not in previous:
+            profile.parent.mkdir(parents=True, exist_ok=True)
+            with profile.open("a") as output:
+                if previous and not previous.endswith("\n"):
+                    output.write("\n")
+                output.write("\n" + block)
+        print(f"PATH configured in {profile}")
+except (OSError, UnicodeError) as error:
+    sys.exit(f"Could not update shell startup files: {error}")
+
+print("Open a new terminal to run mf, or update this terminal now with:")
+print(f'export PATH={quoted}:"$PATH"')
+PY
+    then
+        printf 'mf is installed. Add %s to your PATH manually.\n' "$install_dir"
+    fi
 }
 
 fail() {

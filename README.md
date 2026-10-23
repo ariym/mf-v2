@@ -8,13 +8,15 @@ The client integrates with mf-hub v1 for tag-type definitions, executable flows,
 
 The installer detects macOS or Linux (including Debian) and Intel/AMD (`amd64`) or ARM (`arm64`), downloads the matching executable from the latest GitHub release, verifies its SHA-256 checksum, and installs it to `~/.local/bin/mf`. These are standalone executables, not `.deb` packages.
 
-This repository is currently private. Export `GH_TOKEN` with a GitHub token that has **Contents: read** access to this repository, then run this one-liner (requires `curl` and Python 3):
+Run this one-liner (requires `curl` and Python 3). The repository is public; no GitHub login or token is required:
 
 ```sh
-curl -fsSL -H "Authorization: Bearer $GH_TOKEN" -H 'Accept: application/vnd.github.raw+json' 'https://api.github.com/repos/ariym/mf-v2/contents/scripts/install.sh?ref=release' | sh
+curl -fsSL https://raw.githubusercontent.com/ariym/mf-v2/release/scripts/install.sh | sh
 ```
 
-Ensure `~/.local/bin` is on your `PATH`. To choose another destination, replace the final `sh` with `MF_INSTALL_DIR=/your/bin sh`. FFprobe must also be installed and on `PATH` for media imports.
+After a successful installation, if the destination is missing from `PATH`, the installer asks `Would you like to automatically add 'mf' to your PATH? (Y/n)`. Press Enter to accept, or `n` to skip. It updates your shell startup files for zsh, bash, or a POSIX shell, then prints a command you can run to update the current terminal. New terminals pick up the saved change automatically. Without an interactive terminal, it prints manual instructions instead.
+
+To choose another destination, replace the final `sh` with `MF_INSTALL_DIR=/your/bin sh`. FFprobe must also be installed and on `PATH` for media imports.
 
 The command becomes available after this installer is pushed to `release` and the first release is published. Each push to `release` runs the [release workflow](.github/workflows/release.yml), which tests the project, assigns the next patch version (starting at `v0.1.0`), builds all four executables, and publishes them with their checksums and `install.sh`. The binary's reported version is set from the release tag. Release assets use these names:
 
@@ -29,7 +31,7 @@ Run `mf update` from any directory to check for an update without requiring loca
 Latest Version Installed.
 ```
 
-When a newer version exists, it prints `New Update Available (0.1.1)!` followed by a copyable curl command. That command installs the exact reported version into the directory containing the running executable, resolving symlinks; it does not depend on your current working directory. The check itself only prints instructions. Private release access accepts `GH_TOKEN`, `GITHUB_TOKEN`, or `gh auth login`. Restart any running mf server/daemon after installing to use the new executable.
+When a newer version exists, it prints `New Update Available (0.1.1)!` followed by a copyable curl command. That command installs the exact reported version into the directory containing the running executable, resolving symlinks; it does not depend on your current working directory. The check itself only prints instructions. Public releases require no authentication. Restart any running mf server/daemon after installing to use the new executable.
 
 ## Build from source
 

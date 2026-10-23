@@ -71,25 +71,17 @@ dist/
 
 ## Install and update
 
-Requires `curl`, Python 3, and `sha256sum` or `shasum`. The repository is private, so export a GitHub token with **Contents: read** access:
-
-```sh
-curl -fsSL -H "Authorization: Bearer $GH_TOKEN" -H 'Accept: application/vnd.github.raw+json' 'https://api.github.com/repos/ariym/mf-v2/contents/scripts/install.sh?ref=release' | sh
-```
-
-If you already use `gh auth login`, fetch the installer with that login instead:
-
-```sh
-curl -fsSL -H "Authorization: Bearer $(gh auth token --hostname github.com)" -H 'Accept: application/vnd.github.raw+json' 'https://api.github.com/repos/ariym/mf-v2/contents/scripts/install.sh?ref=release' | sh
-```
-
-If the repository becomes public, no token is required:
+Requires `curl`, Python 3, and `sha256sum` or `shasum`. The repository is public, so no GitHub login or token is required:
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/ariym/mf-v2/release/scripts/install.sh | sh
 ```
 
-The default destination is `~/.local/bin/mf`. For a local `./mf` installation, replace the final `sh` with `MF_INSTALL_DIR="$PWD" sh`. Add the chosen directory to `PATH`, or invoke the local executable as `./mf`.
+The default destination is `~/.local/bin/mf`. For a local `./mf` installation, replace the final `sh` with `MF_INSTALL_DIR="$PWD" sh`.
+
+After installation succeeds, if the destination is missing from `PATH`, the installer asks `Would you like to automatically add 'mf' to your PATH? (Y/n)`. Enter accepts; `n` declines. It reads your answer from the terminal even when the script is piped from curl. For zsh it updates `.zshrc` (respecting `ZDOTDIR`); for bash it updates `.bashrc` and the login profile; for POSIX shells it updates `.profile`. Existing settings are preserved, and rerunning the installer does not duplicate its PATH block. Unsupported shells or noninteractive installs receive manual instructions.
+
+Open a new terminal to use the saved PATH, or run the printed `export PATH=...` command to update the current terminal immediately. An installer subprocess cannot change its parent terminal's environment.
 
 ```sh
 mf version
