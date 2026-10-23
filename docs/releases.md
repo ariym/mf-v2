@@ -83,6 +83,8 @@ After installation succeeds, if the destination is missing from `PATH`, the inst
 
 Open a new terminal to use the saved PATH, or run the printed `export PATH=...` command to update the current terminal immediately. An installer subprocess cannot change its parent terminal's environment.
 
+The installer finishes by running `--help` directly on the newly installed executable, so help appears immediately whether or not the destination is on `PATH`.
+
 ```sh
 mf version
 mf update

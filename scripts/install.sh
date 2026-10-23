@@ -112,6 +112,8 @@ PY
         *":$install_dir:"*) ;;
         *) offer_path_setup ;;
     esac
+    printf '\n'
+    "$install_dir/mf" --help
 }
 
 offer_path_setup() {

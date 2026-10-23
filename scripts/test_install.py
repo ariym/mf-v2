@@ -14,7 +14,14 @@ import time
 import unittest
 
 INSTALLER = Path(__file__).with_name("install.sh")
-BINARY = b"#!/bin/sh\nprintf '0.1.0\\n'\n"
+BINARY = b'''#!/bin/sh
+printf '%s\\n' "$*" >> "$MF_TEST_ROOT/executions"
+if [ "${1:-}" = --help ]; then
+    printf 'Usage: mf [command]\\n'
+else
+    printf '0.1.0\\n'
+fi
+'''
 
 
 class InstallTests(unittest.TestCase):
@@ -153,6 +160,7 @@ pathlib.Path(args[args.index("-o") + 1]).write_bytes(source.read_bytes())
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("verification failed", result.stderr)
         self.assertEqual(existing.read_bytes(), b"previous executable")
+        self.assertFalse((self.root / "executions").exists())
         self.assert_clean()
 
     def test_missing_asset_fails_before_install(self):
@@ -273,6 +281,8 @@ pathlib.Path(args[args.index("-o") + 1]).write_bytes(source.read_bytes())
         self.assertIn("Add " + str(self.destination) + " to your PATH", result.stdout)
         self.assertNotIn("(Y/n)", result.stdout)
         self.assertEqual(list(self.home.iterdir()), [])
+        self.assertTrue(result.stdout.endswith("Usage: mf [command]\n"))
+        self.assertEqual((self.root / "executions").read_text(), "--help\n")
 
     def test_default_yes_adds_safe_zsh_path_once(self):
         profile = self.home / ".zshrc"
@@ -283,6 +293,8 @@ pathlib.Path(args[args.index("-o") + 1]).write_bytes(source.read_bytes())
             self.assertEqual(result.returncode, 0, result.stdout)
             self.assertIn("Would you like to automatically add 'mf' to your PATH? (Y/n)", result.stdout)
             self.assertIn("Open a new terminal", result.stdout)
+            self.assertTrue(result.stdout.endswith("Usage: mf [command]\n"))
+            self.assertLess(result.stdout.index("PATH configured"), result.stdout.index("Usage: mf"))
         saved = profile.read_text()
         self.assertTrue(saved.startswith("# existing settings without a trailing newline\n"))
         self.assertEqual(saved.count("# Added by mf installer"), 1)
@@ -303,6 +315,7 @@ pathlib.Path(args[args.index("-o") + 1]).write_bytes(source.read_bytes())
         self.assertIn("(Y/n)", result.stdout)
         self.assertEqual(profile.read_text(), "# keep this unchanged")
         self.assertTrue((self.destination / "mf").exists())
+        self.assertTrue(result.stdout.endswith("Usage: mf [command]\n"))
 
     def test_existing_path_skips_prompt(self):
         self.environment["PATH"] += os.pathsep + str(self.destination)
