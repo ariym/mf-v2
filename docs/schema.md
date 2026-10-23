@@ -57,6 +57,17 @@ Protocol-v1 results may contain any JSON. Results with a `tags` array must ident
 
 Complete JSON values remain intact, including unknown upstream fields and artifact references. Each attaches to a whole-file segment. Known timed projections are linked without duplicating those values:
 
+Flows deriving results from existing tags may supply `source_tag_id` and
+`source_value_sha256` instead of `media_path`. The digest is the lowercase SHA-256
+of the exact UTF-8 JSON text in the source tag's `value` column. Both fields are
+required together; the source's exact tag type/version must be pinned by the flow.
+Ingestion checks that the source still exists and its digest matches, then attaches
+the result to the source's whole-value links (`value_pointer = ''`). Source event
+pointers are not copied to the new value. The derived job also gains the source
+media associations. Validation and writes share the ingestion transaction; changed
+or deleted sources fail without partial tags or links. These results need no
+submitted media files and are suitable for raw `mf jobs submit` calls.
+
 | Tag type | Timed projection |
 | --- | --- |
 | `speech@2` | `/transcript/segments` |
