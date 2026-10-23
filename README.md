@@ -36,10 +36,13 @@ When a newer version exists, it prints `New Update Available (0.1.1)!` followed 
 Install Go 1.25 or newer and FFmpeg (including `ffprobe`) on `PATH`. FFprobe is required for imports; FFmpeg itself is used to generate test fixtures and regenerate the format catalog. Go 1.21+ can download the required toolchain automatically when `GOTOOLCHAIN=auto` is enabled.
 
 ```sh
-go build -o mf ./cmd/mf
+make build
+./dist/mf version
 ```
 
-Put the executable on `PATH`. The examples use `mf`; use `./mf` when running a local executable outside `PATH`.
+The native executable is written to `dist/mf`. Put it on `PATH`, or use `./dist/mf` in place of `mf` in the examples.
+
+`make dist` builds macOS and Linux executables for AMD64 and ARM64 into `dist/`, alongside SHA-256 checksums and the installer. Set `VERSION` to embed an explicit version, for example `make dist VERSION=0.1.1`. GitHub Releases uses this same build command. `make clean` removes the generated `dist/` directory. See [local builds](docs/releases.md#local-builds) for the output layout.
 
 ## Quick start
 
@@ -131,7 +134,7 @@ Daemon logs are append-only; `mf daemon logs` shows the final 20 lines, and `--f
 go test ./...
 go test -race ./...
 go vet ./...
-go build -o mf ./cmd/mf
+make build
 ```
 
 Tests include actual FFmpeg media fixtures, durable retry/restart recovery, HTTP handlers, and temporary daemon subprocesses. Integration tests require permission to bind loopback ports and Unix sockets. Real media fixture tests skip if FFmpeg is absent; CI installs it on macOS and Linux.

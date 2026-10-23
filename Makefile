@@ -1,6 +1,13 @@
-.PHONY: build test race vet formats
+.PHONY: build dist clean test race vet formats
+
+export VERSION
+
 build:
-	go build -o mf ./cmd/mf
+	sh scripts/build.sh local
+dist:
+	sh scripts/build.sh dist
+clean:
+	rm -rf dist
 test:
 	go test ./...
 race:

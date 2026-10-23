@@ -39,6 +39,36 @@ You do not need to provide a Mac and a Debian machine. The SQLite driver is pure
 
 GitHub Actions is the automation used here. Other CI systems or a manually run build could also upload releases using GitHub's API; GitHub Releases itself does not require Actions.
 
+## Local builds
+
+Local builds and GitHub Actions use the same [build script](../scripts/build.sh) through Make:
+
+```sh
+make build                     # Native executable: dist/mf
+./dist/mf version
+make dist                      # All four platforms, checksums, and installer
+make dist VERSION=0.1.1         # Embed an explicit release version
+make clean                     # Remove dist/
+```
+
+Both build targets accept `VERSION=0.1.1` or `VERSION=v0.1.1`. Without it, the executable uses the development version declared in `internal/config/config.go`. These commands build files locally; they do not create tags or publish releases.
+
+```text
+dist/
+  mf                           # make build: native development executable
+  mf-darwin-amd64               # make dist: Intel macOS
+  mf-darwin-amd64.sha256
+  mf-darwin-arm64               # Apple Silicon macOS
+  mf-darwin-arm64.sha256
+  mf-linux-amd64                # AMD64 Debian/Linux
+  mf-linux-amd64.sha256
+  mf-linux-arm64                # ARM64 Debian/Linux
+  mf-linux-arm64.sha256
+  install.sh
+```
+
+`make build` refreshes only `dist/mf`; run `make dist` to refresh all platform builds. Cross-compilation requires only Go and either `sha256sum` or `shasum`, and disables CGO for portable Linux executables. The native build retains Go's default debug information, while platform release executables are stripped. The entire output directory is Git-ignored. Release uploads include only the platform executables, their checksums, and the installer.
+
 ## Install and update
 
 Requires `curl`, Python 3, and `sha256sum` or `shasum`. The repository is private, so export a GitHub token with **Contents: read** access:

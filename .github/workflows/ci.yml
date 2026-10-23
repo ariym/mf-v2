@@ -18,9 +18,9 @@ jobs:
       - name: Install FFmpeg (macOS)
         if: runner.os == 'macOS'
         run: brew list ffmpeg || brew install ffmpeg
-      - run: sh -n scripts/install.sh
+      - run: sh -n scripts/install.sh && sh -n scripts/build.sh
       - run: python3 -m unittest discover -s scripts -p 'test_*.py'
       - run: go test ./...
       - run: go test -race ./...
       - run: go vet ./...
-      - run: go build -o mf ./cmd/mf
+      - run: make build

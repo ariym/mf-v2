@@ -32,26 +32,12 @@ jobs:
           echo "RELEASE_TAG=$release_tag" >> "$GITHUB_ENV"
       - name: Install FFmpeg for tests
         run: sudo apt-get update && sudo apt-get install -y ffmpeg
-      - run: sh -n scripts/install.sh
+      - run: sh -n scripts/install.sh && sh -n scripts/build.sh
       - run: python3 -m unittest discover -s scripts -p 'test_*.py'
       - run: go test ./...
       - run: go vet ./...
       - name: Build executables and checksums
-        env:
-          CGO_ENABLED: '0'
-        run: |
-          mkdir -p dist
-          version=${RELEASE_TAG#v}
-          for platform in darwin linux; do
-            for architecture in amd64 arm64; do
-              asset="mf-$platform-$architecture"
-              GOOS="$platform" GOARCH="$architecture" go build -trimpath \
-                -ldflags "-s -w -X github.com/ariym/mf-v2/internal/config.Version=$version" \
-                -o "dist/$asset" ./cmd/mf
-              (cd dist && sha256sum "$asset" > "$asset.sha256")
-            done
-          done
-          cp scripts/install.sh dist/install.sh
+        run: make dist VERSION="$RELEASE_TAG"
       - name: Publish release after all assets are uploaded
         env:
           GH_TOKEN: ${{ github.token }}
@@ -67,9 +53,9 @@ jobs:
               echo "Release $RELEASE_TAG is already published."
               exit 0
             fi
-            gh release upload "$RELEASE_TAG" dist/* --clobber
+            gh release upload "$RELEASE_TAG" dist/mf-* dist/install.sh --clobber
           else
-            gh release create "$RELEASE_TAG" dist/* --verify-tag --draft \
+            gh release create "$RELEASE_TAG" dist/mf-* dist/install.sh --verify-tag --draft \
               --title "$RELEASE_TAG" --generate-notes
           fi
           gh release edit "$RELEASE_TAG" --draft=false --latest
