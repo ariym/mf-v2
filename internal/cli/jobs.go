@@ -66,6 +66,7 @@ func addJobCommands(root *cobra.Command, c *config.Config) {
 	for _, mode := range []string{"run", "submit"} {
 		var input, outputDir string
 		var wait bool
+		var segmentIDs []int64
 		use := mode + " <flow>"
 		if mode == "run" {
 			use += " [paths...]"
@@ -91,7 +92,12 @@ func addJobCommands(root *cobra.Command, c *config.Config) {
 				raw, _ = json.Marshal(v)
 			}
 			body := map[string]any{"flow": args[0], "input": raw}
-			if mode == "run" {
+			if len(segmentIDs) > 0 {
+				if len(args) > 1 {
+					return fmt.Errorf("--segment cannot be combined with paths")
+				}
+				body["segment_ids"] = segmentIDs
+			} else if mode == "run" {
 				paths := args[1:]
 				if len(paths) == 0 {
 					paths = []string{"."}
@@ -129,6 +135,7 @@ func addJobCommands(root *cobra.Command, c *config.Config) {
 		}}
 		run.Flags().StringVar(&input, "input", "{}", "flow JSON input or @file")
 		run.Flags().StringVar(&outputDir, "output-dir", "", "result output directory")
+		run.Flags().Int64SliceVar(&segmentIDs, "segment", nil, "catalog segment IDs (repeat or comma-separate)")
 		run.Flags().BoolVar(&wait, "wait", false, "wait for terminal status")
 		group.AddCommand(run)
 	}

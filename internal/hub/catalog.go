@@ -90,6 +90,7 @@ type Artifact struct {
 	Entrypoint string `json:"entrypoint"`
 }
 type Flow struct {
+	Execution *Execution `json:"execution,omitempty"`
 	Key       string     `json:"key"`
 	Title     string     `json:"title"`
 	Version   int        `json:"version"`
@@ -246,6 +247,10 @@ func Decode(kind string, data []byte) (Record, error) {
 		r = Record{Ref: Ref{Flows, v.Key, v.Version}, Value: v}
 		r.Dependencies = append(refs(TagTypes, v.TagTypes), refs(Programs, v.Programs)...)
 		r.Dependencies = append(r.Dependencies, refs(Flows, v.Flows)...)
+		r.Dependencies = append(r.Dependencies, executionDependencies(v.Execution)...)
+		if err == nil {
+			err = validateExecution(v.Execution, v.TagTypes)
+		}
 	case Programs:
 		var v Program
 		if err = DecodeStrict(data, &v); err == nil {

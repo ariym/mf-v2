@@ -42,6 +42,9 @@ func Walk(ctx context.Context, root Record, lookup Lookup) ([]Record, error) {
 				return err
 			}
 		}
+		if err := validateProducers(r, ordered); err != nil {
+			return err
+		}
 		state[r.Ref] = 2
 		ordered = append(ordered, r)
 		return nil

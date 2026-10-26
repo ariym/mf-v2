@@ -20,16 +20,18 @@ type Dependency struct {
 	Path    string `json:"path"`
 }
 type Snapshot struct {
-	Root             store.Module           `json:"root"`
-	Programs         map[string]Dependency  `json:"programs"`
-	Flows            map[string]Dependency  `json:"flows"`
-	Entities         []hub.Ref              `json:"entities"`
-	TagTypes         map[string]int         `json:"tag_types"`
-	ProgramManifests map[string]hub.Program `json:"program_manifests"`
+	FlowModules      map[string]store.Module `json:"flow_modules,omitempty"`
+	FlowManifests    map[string]hub.Flow     `json:"flow_manifests,omitempty"`
+	Root             store.Module            `json:"root"`
+	Programs         map[string]Dependency   `json:"programs"`
+	Flows            map[string]Dependency   `json:"flows"`
+	Entities         []hub.Ref               `json:"entities"`
+	TagTypes         map[string]int          `json:"tag_types"`
+	ProgramManifests map[string]hub.Program  `json:"program_manifests"`
 }
 
 func Pin(ctx context.Context, s *store.Store, ref hub.Ref) (Snapshot, error) {
-	out := Snapshot{Programs: map[string]Dependency{}, Flows: map[string]Dependency{}, TagTypes: map[string]int{}, ProgramManifests: map[string]hub.Program{}}
+	out := Snapshot{FlowModules: map[string]store.Module{}, FlowManifests: map[string]hub.Flow{}, Programs: map[string]Dependency{}, Flows: map[string]Dependency{}, TagTypes: map[string]int{}, ProgramManifests: map[string]hub.Program{}}
 	lookup := func(ctx context.Context, r hub.Ref) (hub.Record, error) {
 		if r.Kind == hub.TagTypes {
 			def, e := s.Definition(ctx, r.Identifier, r.Version)
@@ -84,6 +86,10 @@ func Pin(ctx context.Context, s *store.Store, ref hub.Ref) (Snapshot, error) {
 		m, e := s.Module(ctx, r.Ref.Kind, r.Ref.Identifier)
 		if e != nil {
 			return out, e
+		}
+		if r.Ref.Kind == hub.Flows {
+			out.FlowModules[m.Key] = m
+			out.FlowManifests[m.Key] = r.Value.(hub.Flow)
 		}
 		d := Dependency{m.Version, m.Executable}
 		if r.Ref.Kind == hub.Programs {

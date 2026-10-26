@@ -122,7 +122,7 @@ SQLite uses WAL, foreign keys, a 5-second busy timeout, and short transactions. 
 
 See [HTTP API](docs/api.md) for request/response examples and [custom Go workflows](docs/flows.md) for adding compiled flows and activities.
 
-The server embeds one worker with one activity executing at a time. API imports are durable jobs; direct CLI imports use the same import service synchronously. Job states are `queued`, `running`, `completed`, `failed`, and `cancelled`. Started jobs waiting on retries/timers still count as running for shutdown. Downloaded flows use a generic activity adapter with pinned dependency paths and transactional, idempotent tag ingestion.
+The server embeds one worker with one activity executing at a time. API imports are durable jobs; direct CLI imports use the same import service synchronously. Job states are `waiting`, `queued`, `running`, `completed`, `failed`, and `cancelled`. Started jobs waiting on retries/timers still count as running for shutdown. Downloaded flows use a generic activity adapter with pinned dependency paths and transactional, idempotent tag ingestion.
 
 This initial API has no authentication and is intended for trusted local/private networks. The default binds to localhost. Lifecycle control uses an owner-only Unix socket, never the HTTP API. There is no file-upload endpoint: import paths refer to the server's filesystem.
 
@@ -142,3 +142,13 @@ make build
 ```
 
 Tests include actual FFmpeg media fixtures, durable retry/restart recovery, HTTP handlers, and temporary daemon subprocesses. Integration tests require permission to bind loopback ports and Unix sockets. Real media fixture tests skip if FFmpeg is absent; CI installs it on macOS and Linux.
+
+Protocol-v2 flows can automatically prepare missing data for a catalog segment:
+
+```sh
+mf jobs run recognize_transcript_names@2 --segment 7 --wait
+```
+
+The client shares whole-file prerequisite jobs and runs the segment flow after
+validated outputs commit. See [data prerequisites](docs/hub.md#data-prerequisites-protocol-v2)
+for the manifest contract and coordinated schema-v4 rollout.

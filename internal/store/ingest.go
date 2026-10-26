@@ -11,6 +11,7 @@ import (
 )
 
 type ResultTag struct {
+	TargetIndex       *int            `json:"target_index,omitempty"`
 	Key               string          `json:"key"`
 	Version           int             `json:"version"`
 	MediaPath         string          `json:"media_path,omitempty"`
@@ -25,6 +26,13 @@ type resultBundle struct {
 // IngestResult preserves schema-valid complete values and links their known
 // timed projections. All definitions, segments, instances and links commit once.
 func (s *Store) IngestResult(ctx context.Context, jobID string, raw json.RawMessage, pins map[string]int, media []Media) error {
+	return s.ingestResult(ctx, jobID, raw, pins, media, nil, nil)
+}
+
+func (s *Store) IngestTargetResult(ctx context.Context, jobID string, raw json.RawMessage, pins map[string]int, media []Media, targets []Target, bindings []Binding) error {
+	return s.ingestResult(ctx, jobID, raw, pins, media, targets, bindings)
+}
+func (s *Store) ingestResult(ctx context.Context, jobID string, raw json.RawMessage, pins map[string]int, media []Media, targets []Target, bindings []Binding) error {
 	var bundle resultBundle
 	if !json.Valid(raw) {
 		return fmt.Errorf("invalid result JSON")
@@ -53,6 +61,16 @@ func (s *Store) IngestResult(ctx context.Context, jobID string, raw json.RawMess
 	if cancelled {
 		return fmt.Errorf("job cancelled before result ingestion")
 	}
+	for _, b := range bindings {
+		if b.TargetIndex < 0 || b.TargetIndex >= len(targets) {
+			return fmt.Errorf("invalid prerequisite target")
+		}
+		if b.Kind == "tag" {
+			if err := validateTagBinding(ctx, tx, b, targets[b.TargetIndex]); err != nil {
+				return err
+			}
+		}
+	}
 	byPath := map[string]Media{}
 	for _, m := range media {
 		byPath[m.FilePath] = m
@@ -61,6 +79,9 @@ func (s *Store) IngestResult(ctx context.Context, jobID string, raw json.RawMess
 		if version, ok := pins[t.Key]; !ok || version != t.Version {
 			return fmt.Errorf("result references unpinned tag type %s@%d", t.Key, t.Version)
 		}
+		if t.SourceTagID == nil && t.SourceValueSHA256 != "" {
+			return fmt.Errorf("source_value_sha256 requires source_tag_id")
+		}
 		var links []TagLink
 		if t.SourceTagID != nil {
 			links, e = derivedTagLinks(ctx, tx, t, pins)
@@ -68,11 +89,14 @@ func (s *Store) IngestResult(ctx context.Context, jobID string, raw json.RawMess
 				return e
 			}
 			for _, link := range links {
+				if len(targets) > 0 {
+					continue
+				}
 				if _, e = tx.ExecContext(ctx, "INSERT OR IGNORE INTO job_media(job_id,media_file_id) SELECT ?,media_file_id FROM segments WHERE id=?", jobID, link.SegmentID); e != nil {
 					return e
 				}
 			}
-		} else {
+		} else if len(targets) == 0 {
 			if t.SourceValueSHA256 != "" {
 				return fmt.Errorf("source_value_sha256 requires source_tag_id")
 			}
@@ -162,6 +186,56 @@ func (s *Store) IngestResult(ctx context.Context, jobID string, raw json.RawMess
 						return fmt.Errorf("%s %s: %w", t.Key, projection.pointer, e)
 					}
 					links = append(links, TagLink{SegmentID: id, ValuePointer: projection.pointer})
+				}
+			}
+		}
+		if len(targets) > 0 {
+			if t.TargetIndex == nil || *t.TargetIndex < 0 || *t.TargetIndex >= len(targets) {
+				return fmt.Errorf("v2 result tag requires a valid target_index")
+			}
+			target := targets[*t.TargetIndex]
+			if t.SourceTagID != nil {
+				bound := false
+				for _, b := range bindings {
+					if b.TargetIndex == *t.TargetIndex && b.TagID == *t.SourceTagID && b.SHA256 == t.SourceValueSHA256 {
+						bound = true
+					}
+				}
+				if !bound {
+					return fmt.Errorf("derived result source is not a bound prerequisite")
+				}
+			}
+			id, err := addSegment(ctx, tx, target.MediaFileID, target.Start, target.End)
+			if err != nil {
+				return err
+			}
+			links = []TagLink{{SegmentID: id}}
+			if t.SourceTagID == nil {
+				timed, err := projections(t.Key, t.Version, t.Value)
+				if err != nil {
+					return err
+				}
+				for _, p := range timed {
+					start, err := TimecodeSeconds(p.start)
+					if err != nil {
+						return err
+					}
+					end, err := TimecodeSeconds(p.end)
+					if err != nil {
+						return err
+					}
+					a, _ := ParseTimecode(start)
+					z, _ := ParseTimecode(end)
+					lo, _ := ParseTimecode(target.Start)
+					hi, _ := ParseTimecode(target.End)
+					if a < lo || z > hi {
+						return fmt.Errorf("timed result outside target")
+					}
+					id, err := addSegment(ctx, tx, target.MediaFileID, start, end)
+					if err != nil {
+						return err
+					}
+					links = append(links, TagLink{SegmentID: id, ValuePointer: p.pointer})
 				}
 			}
 		}

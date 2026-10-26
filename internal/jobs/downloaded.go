@@ -30,12 +30,17 @@ import (
 const downloadedFlowName = "mf_downloaded_flow_v1"
 
 type downloadedInput struct {
+	Builtin  string           `json:"builtin,omitempty"`
+	Targets  []store.Target   `json:"targets,omitempty"`
+	Bindings []store.Binding  `json:"bindings,omitempty"`
 	JobID    string           `json:"job_id"`
 	Input    json.RawMessage  `json:"input"`
 	Snapshot modules.Snapshot `json:"snapshot"`
 	Media    []store.Media    `json:"media"`
 }
 type protocolRequest struct {
+	Targets         []store.Target                `json:"targets,omitempty"`
+	Bindings        []store.Binding               `json:"bindings,omitempty"`
 	ProtocolVersion int                           `json:"protocol_version"`
 	JobID           string                        `json:"job_id"`
 	DBPath          string                        `json:"db_path"`
@@ -60,6 +65,17 @@ func downloadedWorkflow(ctx workflow.Context, raw json.RawMessage) (any, error) 
 	}
 	return workflow.ExecuteActivity[json.RawMessage](ctx, flows.ActivityOptions(), "mf_ingest_downloaded_v1", input, result).Get(ctx)
 }
+func downloadedWorkflowV2(ctx workflow.Context, raw json.RawMessage) (any, error) {
+	var in downloadedInput
+	if err := json.Unmarshal(raw, &in); err != nil {
+		return nil, err
+	}
+	result, err := workflow.ExecuteActivity[json.RawMessage](ctx, flows.ActivityOptions(), "mf_execute_downloaded_v2", in).Get(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return workflow.ExecuteActivity[json.RawMessage](ctx, flows.ActivityOptions(), "mf_ingest_downloaded_v2", in, result).Get(ctx)
+}
 func (e *Engine) registerDownloaded() error {
 	if err := e.Registry.RegisterActivity("mf_execute_downloaded_v1", e.executeDownloaded); err != nil {
 		return err
@@ -75,7 +91,43 @@ func (e *Engine) registerDownloaded() error {
 	}); err != nil {
 		return err
 	}
-	return e.Registry.RegisterFlow(downloadedFlowName, downloadedWorkflow, nil)
+	if err := e.Registry.RegisterFlow(downloadedFlowName, downloadedWorkflow, nil); err != nil {
+		return err
+	}
+	if err := e.Registry.RegisterActivity("mf_execute_downloaded_v2", e.executeDownloaded); err != nil {
+		return err
+	}
+	if err := e.Registry.RegisterActivity("mf_ingest_downloaded_v2", func(ctx context.Context, in downloadedInput, result json.RawMessage) (json.RawMessage, error) {
+		var ingested bool
+		if err := e.db.QueryRowContext(ctx, "SELECT ingested FROM job_metadata WHERE id=?", in.JobID).Scan(&ingested); err != nil {
+			return nil, err
+		}
+		if ingested {
+			return result, nil
+		}
+		if err := e.checkCancelled(ctx, in.JobID); err != nil {
+			return nil, workflow.NewPermanentError(err)
+		}
+		if err := e.validateBindings(ctx, in); err != nil {
+			return nil, workflow.NewPermanentError(err)
+		}
+		var err error
+		if in.Builtin != "" {
+			err = e.ingestAudio(ctx, in, result)
+		} else {
+			err = e.store.IngestTargetResult(ctx, in.JobID, result, in.Snapshot.TagTypes, in.Media, in.Targets, in.Bindings)
+		}
+		if err != nil {
+			return nil, workflow.NewPermanentError(err)
+		}
+		return result, nil
+	}); err != nil {
+		return err
+	}
+	if err := e.Registry.RegisterFlow(extractAudioFlow, downloadedWorkflowV2, nil); err != nil {
+		return err
+	}
+	return e.Registry.RegisterFlow(downloadedFlowV2, downloadedWorkflowV2, nil)
 }
 func (e *Engine) checkCancelled(ctx context.Context, id string) error {
 	var cancelled bool
@@ -115,10 +167,48 @@ func (e *Engine) executeDownloaded(ctx context.Context, in downloadedInput) (jso
 	if err := e.checkCancelled(ctx, in.JobID); err != nil {
 		return nil, workflow.NewPermanentError(err)
 	}
-	if err := modules.Executable(in.Snapshot.Root.Executable); err != nil {
-		return nil, workflow.NewPermanentError(err)
+	if len(in.Targets) > 0 {
+		if err := e.validateBindings(ctx, in); err != nil {
+			return nil, workflow.NewPermanentError(err)
+		}
 	}
-	request := protocolRequest{1, in.JobID, e.dbPath, in.Input, in.Snapshot.Programs, in.Snapshot.Flows}
+	if len(in.Targets) > 0 && in.Builtin == "" {
+		manifest := in.Snapshot.FlowManifests[in.Snapshot.Root.Key]
+		for _, binding := range in.Bindings {
+			if binding.Kind != "audio" {
+				continue
+			}
+			actual, err := (media.Probe{}).File(ctx, binding.Path)
+			if err != nil {
+				return nil, workflow.NewPermanentError(err)
+			}
+			for key := range manifest.Programs {
+				if err = modules.Compatible(in.Snapshot.ProgramManifests[key], actual); err != nil {
+					return nil, workflow.NewPermanentError(err)
+				}
+			}
+		}
+		var fields struct {
+			OutputDir string `json:"output_dir"`
+		}
+		if err := json.Unmarshal(in.Input, &fields); err != nil {
+			return nil, err
+		}
+		if err := os.MkdirAll(fields.OutputDir, 0700); err != nil {
+			return nil, err
+		}
+	}
+	if in.Builtin == "" {
+		if err := modules.Executable(in.Snapshot.Root.Executable); err != nil {
+			return nil, workflow.NewPermanentError(err)
+		}
+	}
+	request := protocolRequest{ProtocolVersion: 1, JobID: in.JobID, DBPath: e.dbPath, Input: in.Input, Programs: in.Snapshot.Programs, Flows: in.Snapshot.Flows}
+	if len(in.Targets) > 0 {
+		request.ProtocolVersion = 2
+		request.Targets = in.Targets
+		request.Bindings = in.Bindings
+	}
 	raw, err := json.Marshal(request)
 	if err != nil {
 		return nil, err
@@ -136,6 +226,9 @@ func (e *Engine) executeDownloaded(ctx context.Context, in downloadedInput) (jso
 	}
 	defer log.Close()
 	fmt.Fprintf(log, "\n[%s] %s@%d\n", time.Now().UTC().Format(time.RFC3339Nano), in.Snapshot.Root.Key, in.Snapshot.Root.Version)
+	if in.Builtin != "" {
+		return e.extractAudio(ctx, in, log)
+	}
 	cmd := exec.CommandContext(ctx, in.Snapshot.Root.Executable)
 	cmd.Dir = e.base
 	cmd.Stdin = bytes.NewReader(raw)
@@ -164,7 +257,7 @@ func (e *Engine) executeDownloaded(ctx context.Context, in downloadedInput) (jso
 	if decodeErr != nil {
 		return nil, workflow.NewPermanentError(fmt.Errorf("malformed flow response: %w", decodeErr))
 	}
-	if response.ProtocolVersion != 1 || response.Error != "" || len(response.Result) == 0 || !json.Valid(response.Result) {
+	if response.ProtocolVersion != request.ProtocolVersion || response.Error != "" || len(response.Result) == 0 || !json.Valid(response.Result) {
 		return nil, workflow.NewPermanentError(fmt.Errorf("invalid flow protocol response: %s", response.Error))
 	}
 	return response.Result, nil
@@ -255,7 +348,7 @@ func (e *Engine) SubmitPaths(ctx context.Context, name string, input json.RawMes
 	return e.submitDownloaded(ctx, name, raw, selected, canonical)
 }
 func (e *Engine) submitDownloaded(ctx context.Context, name string, input json.RawMessage, media []store.Media, paths []string) (string, error) {
-	if name == downloadedFlowName {
+	if name == downloadedFlowName || name == downloadedFlowV2 || name == extractAudioFlow {
 		return "", &InputError{fmt.Errorf("reserved flow name")}
 	}
 	ref, err := hub.ParseRef(hub.Flows, name)
@@ -288,6 +381,9 @@ func (e *Engine) submitDownloaded(ctx context.Context, name string, input json.R
 				media = append(media, m)
 			}
 		}
+	}
+	if snapshot.FlowManifests[snapshot.Root.Key].Execution != nil {
+		return e.submitGraph(ctx, downloadedInput{JobID: uuid.NewString(), Input: input, Snapshot: snapshot, Media: media}, paths)
 	}
 	for _, p := range snapshot.ProgramManifests {
 		for _, m := range media {
@@ -359,6 +455,14 @@ func (e *Engine) enqueue(ctx context.Context, id string, raw []byte) error {
 	var compiled compiledInput
 	_ = json.Unmarshal(raw, &compiled)
 	name := downloadedFlowName
+	var graph downloadedInput
+	_ = json.Unmarshal(raw, &graph)
+	if len(graph.Targets) > 0 {
+		name = downloadedFlowV2
+		if graph.Builtin != "" {
+			name = extractAudioFlow
+		}
+	}
 	input := json.RawMessage(raw)
 	if compiled.WorkflowName != "" {
 		name = compiled.WorkflowName
@@ -395,7 +499,7 @@ func (e *Engine) enqueue(ctx context.Context, id string, raw []byte) error {
 	return err
 }
 func (e *Engine) reconcile(ctx context.Context) error {
-	rows, err := e.db.QueryContext(ctx, "SELECT id,snapshot FROM job_metadata WHERE submitted=0 OR (cancel_requested=1 AND terminal_state IS NULL)")
+	rows, err := e.db.QueryContext(ctx, "SELECT id,snapshot FROM job_metadata WHERE id NOT IN (SELECT job_id FROM job_execution) AND (submitted=0 OR (cancel_requested=1 AND terminal_state IS NULL))")
 	if err != nil {
 		return err
 	}
@@ -432,6 +536,9 @@ func (e *Engine) pending(ctx context.Context, id string) (Job, error) {
 	err := e.db.QueryRowContext(ctx, "SELECT flow_key,flow_version,paths,created_at,cancel_requested FROM job_metadata WHERE id=?", id).Scan(&j.Flow, &j.FlowVersion, &paths, &j.CreatedAt, &j.CancelRequested)
 	if err == nil {
 		err = json.Unmarshal([]byte(paths), &j.Paths)
+	}
+	if err == nil {
+		err = e.graphJobFields(ctx, &j)
 	}
 	return j, err
 }
@@ -521,7 +628,7 @@ func (e *Engine) CancelJob(ctx context.Context, id string) error {
 	if err != nil {
 		return err
 	}
-	if job.State != "queued" && job.State != "running" {
+	if job.State != "queued" && job.State != "running" && job.State != "waiting" {
 		return fmt.Errorf("job is already %s", job.State)
 	}
 	var ingested bool
@@ -537,6 +644,9 @@ func (e *Engine) CancelJob(ctx context.Context, id string) error {
 		}
 		if n, _ := result.RowsAffected(); n == 0 {
 			return fmt.Errorf("job results have already committed")
+		}
+		if _, err = e.db.ExecContext(ctx, "UPDATE job_execution SET dedup_key=NULL WHERE job_id=?", id); err != nil {
+			return err
 		}
 		e.activeMu.Lock()
 		cancel := e.active[id]
@@ -599,6 +709,9 @@ func (e *Engine) Retry(ctx context.Context, id string) (string, error) {
 		return "", err
 	}
 	in.JobID = uuid.NewString()
+	if len(in.Targets) > 0 {
+		return e.submitGraph(ctx, in, p)
+	}
 	return e.persistDownloaded(ctx, in, p)
 }
 

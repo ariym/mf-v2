@@ -87,13 +87,13 @@ func TestUnknownVersionAndMissingIndex(t *testing.T) {
 		t.Fatal(e)
 	}
 	defer s.Close()
-	if _, e = s.DB.Exec("UPDATE mf_schema_migrations SET version=4"); e != nil {
+	if _, e = s.DB.Exec("UPDATE mf_schema_migrations SET version=5"); e != nil {
 		t.Fatal(e)
 	}
 	if e = Validate(s.DB); e == nil {
 		t.Fatal("accepted future version")
 	}
-	if _, e = s.DB.Exec("UPDATE mf_schema_migrations SET version=3; DROP INDEX idx_history_instance_sequence_id"); e != nil {
+	if _, e = s.DB.Exec("UPDATE mf_schema_migrations SET version=4; DROP INDEX idx_history_instance_sequence_id"); e != nil {
 		t.Fatal(e)
 	}
 	if e = Validate(s.DB); e == nil {

@@ -6,7 +6,7 @@ All commands accept `--config /path/to/mf.yaml`; otherwise configuration is read
 
 | Command | Behavior |
 | --- | --- |
-| `mf init [-y]` | Create config and a new schema-v3 database; `-y` accepts defaults |
+| `mf init [-y]` | Create config and a new schema-v4 database; `-y` accepts defaults |
 | `mf migrate` | Upgrade a validated v1 database with the server stopped |
 | `mf version` | Print executable version |
 | `mf update` | Check GitHub for a newer release and print a curl command to update the executable in its installation directory; works without config |
@@ -150,3 +150,16 @@ ORDER BY s.media_file_id,length(s.start),s.start;
 All-audio selections produce MP3 without cover art. Any playable video produces MP4, with black video for audio-only clips and silence for missing audio. Video is scaled/padded to a common size and frame rate; audio is normalized before concatenation. Sources are probed again for current stream metadata and duration. The first playable video and first audio stream are selected.
 
 Defaults are editable under `sql_to_ffmpeg` in [mf.example.yaml](../mf.example.yaml): H.264/CRF 20/medium, 1920×1080/30 fps/yuv420p, AAC 192 kbps, stereo 48 kHz, or `libmp3lame` quality 2 for MP3. Missing extensions are appended; incompatible output extensions are rejected. FFmpeg/ffprobe must be installed, and the chosen FFmpeg build must provide configured encoders.
+
+Protocol-v2 flows accept catalog segments without submitting file paths:
+
+```sh
+mf jobs run recognize_transcript_names@2 --segment 7 --wait
+mf jobs run recognize_transcript_names@2 --segment 7,8 --wait
+mf jobs list --state waiting
+```
+
+`--segment` may be repeated and cannot be combined with positional paths.
+Prerequisites run as independent durable jobs; `--wait` includes prerequisite
+waiting time. Set `--input '{"audio_stream_index":1}'` when the source has several
+audio streams. Missing prerequisite data is generated for the entire source file.

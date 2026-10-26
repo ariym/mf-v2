@@ -179,11 +179,31 @@ func (e *Engine) Start() error {
 		e.cancel()
 		return err
 	}
-	go func() { e.done <- e.Worker.WaitForCompletion() }()
+	if err := e.dispatchGraph(ctx); err != nil {
+		e.cancel()
+		return err
+	}
+	schedulerDone := make(chan struct{})
+	go func() {
+		defer close(schedulerDone)
+		ticker := time.NewTicker(time.Second)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				if err := e.dispatchGraph(ctx); err != nil && ctx.Err() == nil {
+					slog.Error("prerequisite reconciliation", "error", err)
+				}
+			}
+		}
+	}()
+	go func() { err := e.Worker.WaitForCompletion(); cancel(); <-schedulerDone; e.done <- err }()
 	return nil
 }
 func (e *Engine) Submit(ctx context.Context, name string, input json.RawMessage) (string, error) {
-	if name == downloadedFlowName {
+	if name == downloadedFlowName || name == downloadedFlowV2 || name == extractAudioFlow {
 		return "", &InputError{fmt.Errorf("reserved flow name")}
 	}
 	if !e.Registry.Has(name) {
@@ -228,16 +248,19 @@ func (e *Engine) Wait(ctx context.Context) error {
 func (e *Engine) Abort() { e.gate.mu.Lock(); e.gate.stopping = true; e.cancel(); e.gate.mu.Unlock() }
 
 type Job struct {
-	ID              string   `json:"id"`
-	State           string   `json:"state"`
-	Result          any      `json:"result,omitempty"`
-	Error           string   `json:"error,omitempty"`
-	CreatedAt       string   `json:"created_at"`
-	CompletedAt     *string  `json:"completed_at"`
-	Flow            string   `json:"flow,omitempty"`
-	FlowVersion     int      `json:"flow_version,omitempty"`
-	Paths           []string `json:"paths,omitempty"`
-	CancelRequested bool     `json:"cancel_requested,omitempty"`
+	Targets         []store.Target `json:"targets,omitempty"`
+	PrerequisiteIDs []string       `json:"prerequisite_ids,omitempty"`
+	WaitingReason   string         `json:"waiting_reason,omitempty"`
+	ID              string         `json:"id"`
+	State           string         `json:"state"`
+	Result          any            `json:"result,omitempty"`
+	Error           string         `json:"error,omitempty"`
+	CreatedAt       string         `json:"created_at"`
+	CompletedAt     *string        `json:"completed_at"`
+	Flow            string         `json:"flow,omitempty"`
+	FlowVersion     int            `json:"flow_version,omitempty"`
+	Paths           []string       `json:"paths,omitempty"`
+	CancelRequested bool           `json:"cancel_requested,omitempty"`
 }
 
 func (e *Engine) Get(ctx context.Context, id string) (Job, error) {
@@ -290,6 +313,9 @@ func (e *Engine) Get(ctx context.Context, id string) (Job, error) {
 		}
 	} else if !errors.Is(metaErr, sql.ErrNoRows) {
 		return j, metaErr
+	}
+	if err = e.graphJobFields(ctx, &j); err != nil {
+		return j, err
 	}
 	return j, nil
 }

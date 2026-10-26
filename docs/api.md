@@ -52,7 +52,7 @@ Job list pagination uses limit 1–1000 and a nonnegative offset. The optional p
 
 ## Web workspace API (schema v3)
 
-The standalone `mf-web` application uses HTTP exclusively. Its own Go server streams catalog paths and generates thumbnails/browser proxies; mf continues to own catalog data, module installation, drafts, and durable jobs. `GET /api/v1/capabilities` reports `workspace_version: 1`, `schema_version: 3`, and the mf server's `os`/`arch`.
+The standalone `mf-web` application uses HTTP exclusively. Its own Go server streams catalog paths and generates thumbnails/browser proxies; mf continues to own catalog data, module installation, drafts, and durable jobs. `GET /api/v1/capabilities` reports `workspace_version: 1`, `schema_version: 4`, and the mf server's `os`/`arch`.
 
 | Method and path | Result |
 | --- | --- |
@@ -100,4 +100,29 @@ A saved job document has this structure:
 {"flow":"transcribe@1","data":{"kind":"media","media_ids":[12,13]},"input":{"options":{}}}
 ```
 
-Data kinds are `media` (`media_ids`), `paths` (`paths`), `sql` (`sql` returning `media_file_id`), and `raw` (pass the `input` object directly). SQL resolves and deduplicates media when Run is clicked; catalog paths are then submitted using mf's existing file-oriented convention. Submitted runs retain their own normalized input and exact module pins. Editing the saved definition does not modify any prior run. The header's future search UI does not call these query endpoints.
+Data kinds are `segments` (`segment_ids`), `media` (`media_ids`), `paths` (`paths`), `sql` (`sql` returning `media_file_id`), and `raw` (pass the `input` object directly). SQL resolves and deduplicates media when Run is clicked; catalog paths are then submitted using mf's existing file-oriented convention. Submitted runs retain their own normalized input and exact module pins. Editing the saved definition does not modify any prior run. The header's future search UI does not call these query endpoints.
+
+## Segment flows and prerequisites
+
+Schema-v4 clients support segment targets on the existing submission endpoint:
+
+```json
+{"flow":"recognize_transcript_names@2","segment_ids":[7],"input":{}}
+```
+
+`segment_ids` and `paths` are mutually exclusive. The flow must opt into protocol
+v2. Ranges, media identity and stream selection are frozen at submission; later
+segment edits do not change the run. Saved definitions support
+`data: {"kind":"segments","segment_ids":[7]}`. The CLI equivalent is:
+
+```sh
+mf jobs run recognize_transcript_names@2 --segment 7 --wait
+```
+
+Job responses add `targets`, `prerequisite_ids`, and `waiting_reason`. `waiting`
+is a nonterminal state supported by list filters, cancellation, and CLI `--wait`.
+Prerequisite jobs appear independently in normal job listings. A failed or
+cancelled prerequisite prevents dependent execution; errors identify the job or
+missing output. Saved submissions include original targets and reconstruct the
+segment/media selection when copied. Capabilities report `schema_version: 4`,
+`flow_protocols: [1,2]`, and `builtin_producers: {"extract_audio":1}`.

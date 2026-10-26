@@ -84,6 +84,32 @@ UPDATE mf_schema_migrations SET version=3;
 
 var v3Objects = map[string]bool{"table manifest_drafts": true, "table job_definitions": true}
 
+const schemaV4 = `
+CREATE TABLE job_execution (
+ job_id TEXT PRIMARY KEY REFERENCES job_metadata(id) ON DELETE CASCADE,
+ targets TEXT NOT NULL CHECK(json_valid(targets)), bindings TEXT NOT NULL DEFAULT '[]' CHECK(json_valid(bindings)),
+ state TEXT NOT NULL CHECK(state IN ('waiting','ready','completed','failed','cancelled')),
+ dedup_key TEXT, error TEXT NOT NULL DEFAULT '', completed_at TEXT
+);
+CREATE UNIQUE INDEX idx_job_execution_active ON job_execution(dedup_key) WHERE state IN ('waiting','ready');
+CREATE TABLE job_dependencies (
+ job_id TEXT NOT NULL REFERENCES job_metadata(id) ON DELETE CASCADE,
+ target_index INTEGER NOT NULL, requirement TEXT NOT NULL,
+ prerequisite_id TEXT NOT NULL REFERENCES job_metadata(id) ON DELETE RESTRICT,
+ PRIMARY KEY(job_id,target_index,requirement)
+);
+CREATE INDEX idx_job_dependencies_prerequisite ON job_dependencies(prerequisite_id);
+CREATE TABLE audio_artifacts (
+ id INTEGER PRIMARY KEY, job_id TEXT NOT NULL UNIQUE REFERENCES job_metadata(id) ON DELETE RESTRICT,
+ media_file_id INTEGER NOT NULL REFERENCES media_files(id) ON DELETE RESTRICT,
+ stream_index INTEGER NOT NULL, path TEXT NOT NULL, sha256 TEXT NOT NULL, source_sha256 TEXT NOT NULL,
+ created_at TEXT NOT NULL
+);
+UPDATE mf_schema_migrations SET version=4;
+`
+
+var v4Objects = map[string]bool{"table job_execution": true, "index idx_job_execution_active": true, "table job_dependencies": true, "index idx_job_dependencies_prerequisite": true, "table audio_artifacts": true}
+
 // Migrate must be called while holding the database's exclusive server lock.
 // It validates the entire legacy schema before changing anything.
 func Migrate(ctx context.Context, path string) error {
@@ -96,10 +122,10 @@ func Migrate(ctx context.Context, path string) error {
 	if err = db.QueryRowContext(ctx, "SELECT version FROM mf_schema_migrations").Scan(&version); err != nil {
 		return fmt.Errorf("not an mf database: %w", err)
 	}
-	if version == 3 {
+	if version == 4 {
 		return Validate(db)
 	}
-	if version != 1 && version != 2 {
+	if version != 1 && version != 2 && version != 3 {
 		return fmt.Errorf("unsupported schema version %d", version)
 	}
 	if err = validateVersion(db, version); err != nil {
@@ -115,7 +141,12 @@ func Migrate(ctx context.Context, path string) error {
 			return err
 		}
 	}
-	if _, err = tx.ExecContext(ctx, schemaV3); err != nil {
+	if version < 3 {
+		if _, err = tx.ExecContext(ctx, schemaV3); err != nil {
+			return err
+		}
+	}
+	if _, err = tx.ExecContext(ctx, schemaV4); err != nil {
 		return err
 	}
 	return tx.Commit()

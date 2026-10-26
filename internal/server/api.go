@@ -76,9 +76,10 @@ func API(c config.Config, s *store.Store, j *jobs.Engine) http.Handler {
 	})
 	mux.HandleFunc("POST /api/v1/jobs", func(w http.ResponseWriter, r *http.Request) {
 		var body struct {
-			Flow  string          `json:"flow"`
-			Input json.RawMessage `json:"input"`
-			Paths []string        `json:"paths,omitempty"`
+			Flow       string          `json:"flow"`
+			SegmentIDs []int64         `json:"segment_ids,omitempty"`
+			Input      json.RawMessage `json:"input"`
+			Paths      []string        `json:"paths,omitempty"`
 		}
 		d := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20))
 		d.DisallowUnknownFields()
@@ -93,7 +94,13 @@ func API(c config.Config, s *store.Store, j *jobs.Engine) http.Handler {
 		}
 		var id string
 		var e error
-		if body.Paths != nil {
+		if body.SegmentIDs != nil {
+			if body.Paths != nil {
+				apiError(w, 400, errors.New("supply segment_ids or paths, not both"))
+				return
+			}
+			id, e = j.SubmitSegments(r.Context(), body.Flow, body.Input, body.SegmentIDs)
+		} else if body.Paths != nil {
 			id, e = j.SubmitPaths(r.Context(), body.Flow, body.Input, body.Paths)
 		} else {
 			id, e = j.Submit(r.Context(), body.Flow, body.Input)

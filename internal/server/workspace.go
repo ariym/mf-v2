@@ -77,7 +77,7 @@ func slicePage[T any](items []T, limit, offset int) []T {
 
 func workspaceAPI(mux *http.ServeMux, c config.Config, s *store.Store, j *jobs.Engine) {
 	mux.HandleFunc("GET /api/v1/capabilities", func(w http.ResponseWriter, r *http.Request) {
-		jsonResponse(w, 200, map[string]any{"workspace_version": 1, "schema_version": 3, "os": runtime.GOOS, "arch": runtime.GOARCH})
+		jsonResponse(w, 200, map[string]any{"workspace_version": 1, "schema_version": 4, "flow_protocols": []int{1, 2}, "builtin_producers": map[string]int{"extract_audio": 1}, "os": runtime.GOOS, "arch": runtime.GOARCH})
 	})
 	mux.HandleFunc("POST /api/v1/query", func(w http.ResponseWriter, r *http.Request) {
 		var in selectionRequest
@@ -155,7 +155,48 @@ func workspaceAPI(mux *http.ServeMux, c config.Config, s *store.Store, j *jobs.E
 		if version > 0 {
 			flow += fmt.Sprintf("@%d", version)
 		}
-		jsonResponse(w, 200, map[string]any{"flow": flow, "data": map[string]string{"kind": "raw"}, "input": json.RawMessage(raw), "original_paths": json.RawMessage(paths)})
+		data := map[string]any{"kind": "raw"}
+		var targets []store.Target
+		var targetJSON string
+		targetErr := s.DB.QueryRowContext(r.Context(), "SELECT targets FROM job_execution WHERE job_id=?", r.PathValue("id")).Scan(&targetJSON)
+		if targetErr == nil {
+			if err = json.Unmarshal([]byte(targetJSON), &targets); err != nil {
+				apiError(w, 500, err)
+				return
+			}
+			// The returned document uses a catalog selector; SubmitPaths supplies media.
+			var inputFields map[string]json.RawMessage
+			if err = json.Unmarshal([]byte(raw), &inputFields); err != nil {
+				apiError(w, 500, err)
+				return
+			}
+			delete(inputFields, "media")
+			normalized, err := json.Marshal(inputFields)
+			if err != nil {
+				apiError(w, 500, err)
+				return
+			}
+			raw = string(normalized)
+			ids := []int64{}
+			mediaIDs := []int64{}
+			allSegments := true
+			for _, target := range targets {
+				ids = append(ids, target.SegmentID)
+				mediaIDs = append(mediaIDs, target.MediaFileID)
+				if target.SegmentID == 0 {
+					allSegments = false
+				}
+			}
+			if allSegments {
+				data = map[string]any{"kind": "segments", "segment_ids": ids}
+			} else {
+				data = map[string]any{"kind": "media", "media_ids": mediaIDs}
+			}
+		} else if !errors.Is(targetErr, sql.ErrNoRows) {
+			apiError(w, 500, targetErr)
+			return
+		}
+		jsonResponse(w, 200, map[string]any{"flow": flow, "data": data, "input": json.RawMessage(raw), "original_paths": json.RawMessage(paths), "targets": targets})
 	})
 }
 
@@ -303,10 +344,11 @@ func annotationAPI(mux *http.ServeMux, s *store.Store) {
 type jobDefinition struct {
 	Flow string `json:"flow"`
 	Data struct {
-		Kind     string   `json:"kind"`
-		MediaIDs []int64  `json:"media_ids,omitempty"`
-		Paths    []string `json:"paths,omitempty"`
-		SQL      string   `json:"sql,omitempty"`
+		Kind       string   `json:"kind"`
+		SegmentIDs []int64  `json:"segment_ids,omitempty"`
+		MediaIDs   []int64  `json:"media_ids,omitempty"`
+		Paths      []string `json:"paths,omitempty"`
+		SQL        string   `json:"sql,omitempty"`
 	} `json:"data"`
 	Input json.RawMessage `json:"input"`
 }
@@ -318,6 +360,9 @@ func runDefinition(ctx context.Context, c config.Config, s *store.Store, j *jobs
 	}
 	if len(def.Input) == 0 {
 		def.Input = json.RawMessage(`{}`)
+	}
+	if def.Data.Kind == "segments" {
+		return j.SubmitSegments(ctx, def.Flow, def.Input, def.Data.SegmentIDs)
 	}
 	if def.Data.Kind == "raw" {
 		return j.Submit(ctx, def.Flow, def.Input)
@@ -354,7 +399,7 @@ func runDefinition(ctx context.Context, c config.Config, s *store.Store, j *jobs
 			}
 		}
 	} else if def.Data.Kind != "paths" {
-		return "", fmt.Errorf("data kind must be media, paths, sql, or raw")
+		return "", fmt.Errorf("data kind must be media, paths, sql, segments, or raw")
 	}
 	return j.SubmitPaths(ctx, def.Flow, def.Input, paths)
 }

@@ -30,6 +30,10 @@ func TestDownloadedChild(t *testing.T) {
 		fmt.Fprintln(os.Stderr, e)
 		os.Exit(2)
 	}
+	if mode == "graph" {
+		graphChild(request)
+		return
+	}
 	if request.ProtocolVersion != 1 || request.JobID == "" || !filepath.IsAbs(request.DBPath) || request.Programs == nil || request.Flows == nil {
 		os.Exit(3)
 	}

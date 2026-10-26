@@ -90,3 +90,80 @@ Success requires exit 0 and one valid protocol-v1 response with a result. Nonzer
 Process groups are terminated on cancellation or server shutdown, with forced cleanup after a bounded grace period. A forced daemon stop preserves unfinished workflow checkpoints for restart. Explicit cancellation is durable and terminal. Submission intent is saved before engine creation and reconciled on startup, preventing lost work in that crash window. Execution and ingestion are separate activities, so a checkpointed result can be ingested again safely without rerunning inference.
 
 The files in `internal/hub/testdata` are contract fixtures copied from the sibling mf-hub audio catalog, not runtime dependencies.
+
+## Data prerequisites (protocol v2)
+
+A flow can opt into `execution.protocol_version: 2` and declare data requirements
+separately from its existing schema/program dependencies:
+
+```json
+{
+  "execution": {
+    "protocol_version": 2,
+    "requires": [{
+      "name": "transcript",
+      "any_of": [
+        {"kind": "tag", "key": "speech", "version": 2},
+        {"kind": "tag", "key": "diarized_transcript", "version": 2}
+      ],
+      "producer": {"flow": "transcribe", "version": 2, "input": {}}
+    }],
+    "produces": [{"kind": "tag", "key": "transcript_names", "version": 1}]
+  }
+}
+```
+
+Tag identities must also appear in the manifest's exact `tags` pins. Producer
+flows participate in installation, pinning, conflict and cycle checks and must
+declare an acceptable output. `tags` alone never triggers data generation. Audio
+requirements use `{"kind":"audio","key":"audio","version":1}` and
+`{"builtin":"extract_audio","version":1}` as the producer.
+
+The client resolves existing whole-value tags covering the requested range
+(preferred alternatives in declaration order, newest tag ID first), then shares
+active producer jobs or creates missing prerequisites recursively. Missing data
+is generated for the whole file. A transaction saves all nodes, edges, frozen
+ranges, bindings and module pins before any job is dispatched. A one-second
+reconciler releases dependents only after successful workflows and committed,
+validated outputs. Waiting jobs consume no activity worker slot. Failures and
+explicit prerequisite cancellation fail their dependents; cancelling a consumer
+leaves its producer jobs reusable. Retry retains the saved flow pins and ranges
+and resolves the prerequisites again. Source-tag digests are checked before
+execution and transactionally during result ingestion.
+
+Protocol v2 retains the existing envelope fields and adds `targets` and
+`bindings`. Targets contain `media_file_id`, `media_path`, optional `segment_id`,
+normalized `start`/`end`, optional `stream_index`, and `whole_file`. Bindings contain
+`target_index`, requirement `name`, exact `kind`/`key`/`version`, and either a
+`tag_id`/`sha256` or audio `path`/`sha256`/`source_sha256`/`stream_index`. Responses
+must echo `protocol_version: 2`; every result tag supplies `target_index`. Derived
+tags retain the original `source_tag_id` and `source_value_sha256`; their links
+attach to the requested range. Original JSON values and timed coordinates remain
+intact. Existing protocol-v1 jobs and manifests retain their execution contract.
+
+Audio extraction uses local FFmpeg and FFprobe, selects the requested source
+stream and atomically publishes a mono, 16 kHz PCM WAV with source/output hashes.
+Suitable existing standalone WAV audio is reused directly. Multiple source audio
+streams require `input.audio_stream_index`; a source without audio fails. Missing
+or corrupt derived audio is regenerated. Compatibility checks use the supplied
+resolved audio and each flow's direct programs. No model downloads or module
+installation occur as a side effect of running a job.
+
+Deploy mf-hub support, stop mf, run `mf migrate`, and start the updated client
+before installing new immutable v2 flow releases. Install modules and prepare
+models explicitly as before.
+
+The cross-repository smoke test uses the real packaged flows and FFmpeg with
+fixture inference programs. It creates a temporary catalog and stops only its own
+daemon. For the currently supported darwin/arm64 flow releases, prepare local
+artifacts (from the respective flow repositories) with:
+
+```sh
+go build -o /tmp/mf-prerequisite-build/mf ./cmd/mf
+# In mf-flow-transcribe:
+python3 scripts/release.py --repo ariym/mf-flow-transcribe --version 2 --platform darwin/arm64 --output /tmp/mf-prerequisite-build/transcribe
+# In mf-flow-recognize-transcript-names:
+python3 scripts/release.py --repo ariym/mf-flow-recognize-transcript-names --version 2 --platform darwin/arm64 --output /tmp/mf-prerequisite-build/names
+# Back in mf-v2:
+python3 scripts/test_prerequisite_flows.py --build-dir /tmp/mf-prerequisite-build
+```

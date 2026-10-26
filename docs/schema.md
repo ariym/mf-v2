@@ -1,4 +1,4 @@
-# Client schema v3
+# Client schema v4
 
 The hub's **tag** is a schema definition. In the client, this is always a **tag type** (`TagType`, the `tagtype` table, and the `tagtypes` CLI group). A client **tag** (`Tag`, the `tag` table, and the `tags` CLI group) is an instantiation containing a validated value. Hub transport manifests retain the hub's `tags` spelling; client definition/plan output translates it to `tag_types`. Instance values and embedded JSON schemas are never renamed.
 
@@ -10,7 +10,7 @@ mf migrate
 mf daemon start
 ```
 
-Stop foreground servers too. `mf migrate` acquires the same exclusive database lock as the server. It validates the complete v1 or v2 application and workflow schema before applying a transactional additive migration. Media IDs, file metadata, timestamps, and durable workflow records remain intact. Running it on v3 validates without changing the schema. Foreign, modified, or future schemas are rejected. Normal commands never migrate automatically. `mf init` creates v3 for a new database. Schema v3 adds `manifest_drafts` and `job_definitions`, each with an ID, name, editable document text, and audit timestamps. Drafts are separate from installed immutable manifests and execution snapshots.
+Stop foreground servers too. `mf migrate` acquires the same exclusive database lock as the server. It validates the complete v1, v2, or v3 application and workflow schema before applying a transactional additive migration. Media IDs, file metadata, timestamps, and durable workflow records remain intact. Running it on v4 validates without changing the schema. Foreign, modified, or future schemas are rejected. Normal commands never migrate automatically. `mf init` creates v4 for a new database. Schema v3 added `manifest_drafts` and `job_definitions`, each with an ID, name, editable document text, and audit timestamps. Drafts are separate from installed immutable manifests and execution snapshots.
 
 ## Entities
 
@@ -80,3 +80,18 @@ submitted media files and are suitable for raw `mf jobs submit` calls.
 Both start and end must be supplied to create a timed projection. Missing/null event timestamps are not invented. Whole-file attachment requires a known positive duration. A stable job/result key and ingestion flag make retries idempotent.
 
 For timestamp ordering beyond 99 hours, use `ORDER BY length(start), start` on normalized timecodes rather than plain lexical order.
+
+## Schema v4: prerequisite execution
+
+`mf migrate` now upgrades v1/v2/v3 catalogs transactionally to v4. Existing catalog,
+draft, module, and workflow records are preserved; normal commands still require
+an explicit migration with the daemon stopped.
+
+`job_execution` persists immutable target JSON, resolved binding JSON, scheduling
+state, active-work identity and failures/completion time. A partial unique index
+shares active prerequisites while allowing terminal work to be retried.
+`job_dependencies` connects a target's named requirement to its prerequisite job.
+`audio_artifacts` records the producing job, original media and stream, derived
+path, output checksum and source checksum. Job metadata and module pins remain
+the durable submission outbox. V1 workflow names remain registered for replay;
+v2 workflows use a separate stable name and execute/ingest activity pair.
