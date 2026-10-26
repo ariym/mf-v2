@@ -110,6 +110,23 @@ UPDATE mf_schema_migrations SET version=4;
 
 var v4Objects = map[string]bool{"table job_execution": true, "index idx_job_execution_active": true, "table job_dependencies": true, "index idx_job_dependencies_prerequisite": true, "table audio_artifacts": true}
 
+const schemaV5 = `
+CREATE TABLE media_requests (
+ id TEXT PRIMARY KEY, fingerprint TEXT NOT NULL UNIQUE, plan TEXT NOT NULL CHECK(json_valid(plan)),
+ state TEXT NOT NULL, error TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL, modified_at TEXT NOT NULL
+);
+CREATE TABLE production_coverage (
+ job_id TEXT NOT NULL REFERENCES job_metadata(id) ON DELETE CASCADE,
+ media_file_id INTEGER NOT NULL REFERENCES media_files(id) ON DELETE CASCADE,
+ start TEXT NOT NULL, end TEXT NOT NULL, stream_index INTEGER,
+ key TEXT NOT NULL, version INTEGER NOT NULL, source_sha256 TEXT NOT NULL, output_digest TEXT NOT NULL,
+ PRIMARY KEY(job_id,media_file_id,start,end,key,version)
+);
+UPDATE mf_schema_migrations SET version=5;
+`
+
+var v5Objects = map[string]bool{"table media_requests": true, "table production_coverage": true}
+
 // Migrate must be called while holding the database's exclusive server lock.
 // It validates the entire legacy schema before changing anything.
 func Migrate(ctx context.Context, path string) error {
@@ -122,10 +139,10 @@ func Migrate(ctx context.Context, path string) error {
 	if err = db.QueryRowContext(ctx, "SELECT version FROM mf_schema_migrations").Scan(&version); err != nil {
 		return fmt.Errorf("not an mf database: %w", err)
 	}
-	if version == 4 {
+	if version == 5 {
 		return Validate(db)
 	}
-	if version != 1 && version != 2 && version != 3 {
+	if version != 1 && version != 2 && version != 3 && version != 4 {
 		return fmt.Errorf("unsupported schema version %d", version)
 	}
 	if err = validateVersion(db, version); err != nil {
@@ -146,7 +163,12 @@ func Migrate(ctx context.Context, path string) error {
 			return err
 		}
 	}
-	if _, err = tx.ExecContext(ctx, schemaV4); err != nil {
+	if version < 4 {
+		if _, err = tx.ExecContext(ctx, schemaV4); err != nil {
+			return err
+		}
+	}
+	if _, err = tx.ExecContext(ctx, schemaV5); err != nil {
 		return err
 	}
 	return tx.Commit()

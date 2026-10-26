@@ -17,8 +17,9 @@ from pathlib import Path
 FIXTURE_PROGRAM = '''#!/usr/bin/env python3
 import sys,json,pathlib,hashlib
 key=pathlib.Path(sys.argv[0]).name
+if sys.argv[1] in ('ready','prepare'):print('{}');sys.exit(0)
 if sys.argv[1]=='describe':
- print(json.dumps({'program_name':key,'version':1}));sys.exit(0)
+ print(json.dumps({'program_name':key,'version':int(pathlib.Path(sys.argv[0]+'.version').read_text())}));sys.exit(0)
 r=json.load(sys.stdin)
 if sys.argv[1]=='preflight':print('{}');sys.exit(0)
 if key=='gliner':
@@ -35,7 +36,8 @@ else:
  'segments':[{'text':'Alice','start':0,'end':1}]},'raw':{},
  'media':{'path':path,'sha256':hashlib.sha256(pathlib.Path(path).read_bytes()).hexdigest(),
  'stream_index':0}}
- print(json.dumps({'provenance':{},'result':{'media_path':path,'speech':value}}))
+ speaker={'diarization':[],'exclusive_diarization':[],'embeddings':{},'raw':{},'media':value['media']}
+ print(json.dumps({'provenance':{},'result':{'media_path':path,'speech':value,'speaker':speaker}}))
 '''
 
 
@@ -75,11 +77,16 @@ def main():
         run('tagtypes', 'add', projects / 'mf-v2/internal/hub/testdata' / f'{key}.v2.json')
     run('tagtypes', 'add', projects /
         'mf-flow-recognize-transcript-names/schemas/transcript_names.v1.json')
+    transcribe_manifest = json.loads((build / 'transcribe/manifest.json').read_text())
+    transcribe_version = transcribe_manifest['version']
+    names_version = json.loads((build / 'names/manifest.json').read_text())['version']
     for key in ['pyannote', 'whisperx', 'gliner']:
         executable = root / key
         executable.write_text(FIXTURE_PROGRAM)
         executable.chmod(0o755)
-        run('programs', 'link', key, executable, '--version', '1',
+        version = transcribe_manifest['programs'].get(key, 1)
+        Path(str(executable) + '.version').write_text(str(version))
+        run('programs', 'link', key, executable, '--version', str(version),
             '--input-formats', '[{"container":".wav"}]')
 
     # Register the local packages before starting the temporary daemon. Hub
@@ -88,6 +95,12 @@ def main():
         for name, folder in [('transcribe', 'transcribe'),
                              ('recognize_transcript_names', 'names')]:
             manifest = json.loads((build / folder / 'manifest.json').read_text())
+            if name == 'recognize_transcript_names':
+                for requirement in manifest.get('execution', {}).get('requires', []):
+                    if requirement['producer'].get('flow') == 'transcribe':
+                        requirement['producer']['version'] = transcribe_version
+                if 'transcribe' in manifest.get('flows', {}):
+                    manifest['flows']['transcribe'] = transcribe_version
             artifact = manifest['artifacts'][0]
             archive = build / folder / artifact['url'].rsplit('/', 1)[1]
             with tarfile.open(archive) as package:
@@ -96,12 +109,18 @@ def main():
             database.execute('''INSERT INTO flow(key,version,manifest,source,install_dir,
                 executable,platform_os,platform_arch,artifact_sha256,created_at,modified_at)
                 VALUES(?,?,?,?,?,?,?,?,?,?,?)''',
-                (name, 2, json.dumps(manifest), 'isolated-e2e', '', str(executable),
+                (name, manifest['version'], json.dumps(manifest), 'isolated-e2e', '', str(executable),
                  artifact['os'], artifact['arch'], artifact['sha256'],
                  '2026-10-26T00:00:00Z', '2026-10-26T00:00:00Z'))
 
+    with sqlite3.connect(root / 'mf.db') as database:
+        for key, profile in transcribe_manifest.get('execution', {}).get('preparation', {}).items():
+            raw = database.execute('SELECT manifest FROM program WHERE key=?', (key,)).fetchone()[0]
+            program = json.loads(raw)
+            program['preparation'] = {profile: {'ready_args':['ready'], 'prepare_args':['prepare'], 'download_bytes':0}}
+            database.execute('UPDATE program SET manifest=? WHERE key=?', (json.dumps(program), key))
     try:
-        result = json.loads(run('jobs', 'run', 'recognize_transcript_names@2',
+        result = json.loads(run('jobs', 'run', f'recognize_transcript_names@{names_version}',
                                 '--segment', segment, '--wait', '--json'))
         assert result['state'] == 'completed', result
         with sqlite3.connect(root / 'mf.db') as database:
@@ -115,6 +134,11 @@ def main():
             assert len(links) == 1 and links[0][1:3] == (
                 '00:00:00.100000', '00:00:00.800000'), links
             assert database.execute('SELECT count(*) FROM audio_artifacts').fetchone()[0] == 1
+        if transcribe_version >= 3:
+            requested = json.loads(run('request', 'diarized_transcript@2', '--segment', segment, '--yes', '--json'))
+            assert requested[0]['type']['key'] == 'diarized_transcript', requested
+            combined = requested[0]['tags'][0]['value']
+            assert 'speech' in combined and 'speaker' in combined, combined
         print(json.dumps({'root': str(root), 'state': result['state'],
                           'jobs': jobs, 'result_links': links}, indent=2))
     finally:

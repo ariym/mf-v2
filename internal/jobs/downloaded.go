@@ -30,13 +30,15 @@ import (
 const downloadedFlowName = "mf_downloaded_flow_v1"
 
 type downloadedInput struct {
-	Builtin  string           `json:"builtin,omitempty"`
-	Targets  []store.Target   `json:"targets,omitempty"`
-	Bindings []store.Binding  `json:"bindings,omitempty"`
-	JobID    string           `json:"job_id"`
-	Input    json.RawMessage  `json:"input"`
-	Snapshot modules.Snapshot `json:"snapshot"`
-	Media    []store.Media    `json:"media"`
+	RequestSources map[string]string             `json:"request_sources,omitempty"`
+	Tools          map[string]modules.Dependency `json:"tools,omitempty"`
+	Builtin        string                        `json:"builtin,omitempty"`
+	Targets        []store.Target                `json:"targets,omitempty"`
+	Bindings       []store.Binding               `json:"bindings,omitempty"`
+	JobID          string                        `json:"job_id"`
+	Input          json.RawMessage               `json:"input"`
+	Snapshot       modules.Snapshot              `json:"snapshot"`
+	Media          []store.Media                 `json:"media"`
 }
 type protocolRequest struct {
 	Targets         []store.Target                `json:"targets,omitempty"`
@@ -103,7 +105,7 @@ func (e *Engine) registerDownloaded() error {
 			return nil, err
 		}
 		if ingested {
-			return result, nil
+			return result, e.recordCoverage(ctx, in)
 		}
 		if err := e.checkCancelled(ctx, in.JobID); err != nil {
 			return nil, workflow.NewPermanentError(err)
@@ -115,12 +117,15 @@ func (e *Engine) registerDownloaded() error {
 		if in.Builtin != "" {
 			err = e.ingestAudio(ctx, in, result)
 		} else {
+			if err := validateRequestedOutputs(in, result); err != nil {
+				return nil, workflow.NewPermanentError(err)
+			}
 			err = e.store.IngestTargetResult(ctx, in.JobID, result, in.Snapshot.TagTypes, in.Media, in.Targets, in.Bindings)
 		}
 		if err != nil {
 			return nil, workflow.NewPermanentError(err)
 		}
-		return result, nil
+		return result, e.recordCoverage(ctx, in)
 	}); err != nil {
 		return err
 	}
@@ -167,6 +172,12 @@ func (e *Engine) executeDownloaded(ctx context.Context, in downloadedInput) (jso
 	if err := e.checkCancelled(ctx, in.JobID); err != nil {
 		return nil, workflow.NewPermanentError(err)
 	}
+	for path, wanted := range in.RequestSources {
+		sum, err := hashFile(ctx, path)
+		if err != nil || sum != wanted {
+			return nil, workflow.NewPermanentError(fmt.Errorf("request media changed: %s", path))
+		}
+	}
 	if len(in.Targets) > 0 {
 		if err := e.validateBindings(ctx, in); err != nil {
 			return nil, workflow.NewPermanentError(err)
@@ -178,7 +189,7 @@ func (e *Engine) executeDownloaded(ctx context.Context, in downloadedInput) (jso
 			if binding.Kind != "audio" {
 				continue
 			}
-			actual, err := (media.Probe{}).File(ctx, binding.Path)
+			actual, err := (media.Probe{Binary: in.Tools["ffprobe"].Path}).File(ctx, binding.Path)
 			if err != nil {
 				return nil, workflow.NewPermanentError(err)
 			}

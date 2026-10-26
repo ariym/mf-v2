@@ -47,3 +47,19 @@ func TestExecutionRequirementsAndProviderValidation(t *testing.T) {
 		}
 	}
 }
+
+func TestPreparationMetadataValidation(t *testing.T) {
+	p := Program{ProgramName: "test", Version: 1, Desc: "test", GitRepo: "https://example.com/test", Artifacts: []Artifact{asset()}, Preparation: map[string]Preparation{"default": {ReadyArgs: []string{"ready"}, PrepareArgs: []string{"prepare"}, DownloadBytes: 12}}}
+	raw, _ := json.Marshal(p)
+	if _, err := Decode(Programs, raw); err != nil {
+		t.Fatal(err)
+	}
+	p.Preparation["default"] = Preparation{ReadyArgs: []string{"ready"}, PrepareArgs: []string{"prepare"}, DownloadBytes: -1}
+	raw, _ = json.Marshal(p)
+	if _, err := Decode(Programs, raw); err == nil {
+		t.Fatal("accepted negative preparation size")
+	}
+	if _, err := Decode(Programs, []byte(`{"program_name":"test","version":1,"desc":"x","git_repo":"https://example.com/test","artifacts":[],"preparation":{"default":{"ready_args":["ready"],"prepare_args":["prepare"]}}}`)); err == nil {
+		t.Fatal("accepted absent preparation size")
+	}
+}

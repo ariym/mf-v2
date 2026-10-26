@@ -17,7 +17,7 @@ func TestMigrateV2PreservesCatalogAndAddsDraftStorage(t *testing.T) {
 	if _, err = s.Upsert(ctx, Media{FilePath: "/media/keep.mp4", MediaType: "video", FileSize: 23}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err = s.DB.Exec("DROP TABLE job_dependencies; DROP TABLE audio_artifacts; DROP TABLE job_execution; DROP TABLE manifest_drafts; DROP TABLE job_definitions; UPDATE mf_schema_migrations SET version=2"); err != nil {
+	if _, err = s.DB.Exec("DROP TABLE production_coverage;DROP TABLE media_requests;DROP TABLE job_dependencies; DROP TABLE audio_artifacts; DROP TABLE job_execution; DROP TABLE manifest_drafts; DROP TABLE job_definitions; UPDATE mf_schema_migrations SET version=2"); err != nil {
 		t.Fatal(err)
 	}
 	s.Close()

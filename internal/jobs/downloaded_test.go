@@ -30,6 +30,17 @@ func TestDownloadedChild(t *testing.T) {
 		fmt.Fprintln(os.Stderr, e)
 		os.Exit(2)
 	}
+	if mode == "request" {
+		if _, err := os.Stat(request.Programs["tool"].Path + ".ready"); err != nil {
+			os.Exit(20)
+		}
+		tags := []any{}
+		for i := range request.Targets {
+			tags = append(tags, map[string]any{"key": "confidence", "version": 1, "target_index": i, "value": 0.8})
+		}
+		json.NewEncoder(os.Stdout).Encode(map[string]any{"protocol_version": 2, "result": map[string]any{"tags": tags}})
+		os.Exit(0)
+	}
 	if mode == "graph" {
 		graphChild(request)
 		return

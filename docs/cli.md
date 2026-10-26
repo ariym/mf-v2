@@ -163,3 +163,7 @@ mf jobs list --state waiting
 Prerequisites run as independent durable jobs; `--wait` includes prerequisite
 waiting time. Set `--input '{"audio_stream_index":1}'` when the source has several
 audio streams. Missing prerequisite data is generated for the entire source file.
+
+## Request outputs
+
+`mf request <tagtype[@version]> [paths...]` reviews missing installations and prerequisite jobs, waits, and returns requested tags. Use `--tagtype` for additional outputs, `--segment` for catalog ranges, `--flow` to choose a producer, `--input` for JSON options, `--dry-run` to preview, `--background` to return an ID, and `--yes` to accept installation/job prompts. `mf requests show <id>` and `mf requests wait <id>` retrieve accepted requests. See [output requests](requests.md).

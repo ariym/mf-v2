@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/ariym/mf-v2/flows"
+	"github.com/ariym/mf-v2/internal/hub"
 	"github.com/ariym/mf-v2/internal/media"
 	"github.com/ariym/mf-v2/internal/store"
 	"github.com/cschleiden/go-workflows/backend"
@@ -31,19 +32,20 @@ import (
 var ErrStopping = errors.New("server is stopping")
 
 type Engine struct {
-	gate        *gate
-	Worker      *worker.Worker
-	Registry    *flows.Registry
-	client      *client.Client
-	db          *sql.DB
-	cancel      context.CancelFunc
-	done        chan error
-	store       *store.Store
-	base        string
-	dbPath      string
-	excludeDirs []string
-	activeMu    sync.Mutex
-	active      map[string]context.CancelFunc
+	RequestHubURL string
+	gate          *gate
+	Worker        *worker.Worker
+	Registry      *flows.Registry
+	client        *client.Client
+	db            *sql.DB
+	cancel        context.CancelFunc
+	done          chan error
+	store         *store.Store
+	base          string
+	dbPath        string
+	excludeDirs   []string
+	activeMu      sync.Mutex
+	active        map[string]context.CancelFunc
 }
 type gate struct {
 	backend.Backend
@@ -183,6 +185,25 @@ func (e *Engine) Start() error {
 		e.cancel()
 		return err
 	}
+	requestDone := make(chan struct{})
+	go func() {
+		defer close(requestDone)
+		if e.RequestHubURL == "" {
+			return
+		}
+		ticker := time.NewTicker(time.Second)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				if err := e.reconcileRequests(ctx, hub.Client{URL: e.RequestHubURL}); err != nil && ctx.Err() == nil {
+					slog.Error("request reconciliation", "error", err)
+				}
+			}
+		}
+	}()
 	schedulerDone := make(chan struct{})
 	go func() {
 		defer close(schedulerDone)
@@ -199,7 +220,7 @@ func (e *Engine) Start() error {
 			}
 		}
 	}()
-	go func() { err := e.Worker.WaitForCompletion(); cancel(); <-schedulerDone; e.done <- err }()
+	go func() { err := e.Worker.WaitForCompletion(); cancel(); <-schedulerDone; <-requestDone; e.done <- err }()
 	return nil
 }
 func (e *Engine) Submit(ctx context.Context, name string, input json.RawMessage) (string, error) {

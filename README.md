@@ -56,7 +56,7 @@ mf add /path/to/media
 mf server start
 ```
 
-`mf init` asks for the five core configuration values. Enter accepts a default; `-y` uses all defaults. New configurations also include hub, module, and rendering defaults. Initialization creates schema v3 and the workflow tables. It never overwrites an existing config. Existing v1/v2 databases require `mf migrate` with the server stopped.
+`mf init` asks for the five core configuration values. Enter accepts a default; `-y` uses all defaults. New configurations also include hub, module, and rendering defaults. Initialization creates schema v5 and the workflow tables. It never overwrites an existing config. Existing v1–v4 databases require `mf migrate` with the server stopped.
 
 ```sh
 mf flows install transcribe@1
@@ -116,7 +116,7 @@ The catalog stores `media_files`, `file_audio_metadata`, and `file_video_metadat
 
 Each file's record and stream metadata commit together. Reimporting preserves the media ID and creation timestamp. Directory scans continue after errors and print added, updated, skipped, and failed counts (up to 100 detailed errors). Ordinary non-media files are skipped; failed expected media imports produce a nonzero exit status. Explicit non-media inputs fail. Probes time out after 30 seconds, and network media protocols are disabled.
 
-SQLite uses WAL, foreign keys, a 5-second busy timeout, and short transactions. App and engine migrations have separate bookkeeping. `mf migrate` validates and upgrades the known v1/v2 schemas transactionally; foreign, changed, and future schemas are rejected. See [schema v3](docs/schema.md) for timecodes, shared tag instances, definitions, and result ingestion.
+SQLite uses WAL, foreign keys, a 5-second busy timeout, and short transactions. App and engine migrations have separate bookkeeping. `mf migrate` validates and upgrades the known v1–v4 schemas transactionally; foreign, changed, and future schemas are rejected. See [schema v5](docs/schema.md) for timecodes, shared tag instances, definitions, and result ingestion.
 
 ## API and custom jobs
 
@@ -152,3 +152,11 @@ mf jobs run recognize_transcript_names@2 --segment 7 --wait
 The client shares whole-file prerequisite jobs and runs the segment flow after
 validated outputs commit. See [data prerequisites](docs/hub.md#data-prerequisites-protocol-v2)
 for the manifest contract and coordinated schema-v4 rollout.
+
+### Request an output
+
+```sh
+mf request diarized_transcript video.mp4
+```
+
+The client reviews missing package/model downloads and a numbered prerequisite job list, then returns the requested tags. See [output requests](docs/requests.md) for supported manifests, preparation, preview/background flags and deployment requirements.

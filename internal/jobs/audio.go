@@ -30,7 +30,7 @@ func (e *Engine) extractAudio(ctx context.Context, in downloadedInput, log *os.F
 	}
 	m := in.Media[0]
 	t := in.Targets[0]
-	probe, err := (media.Probe{}).File(ctx, m.FilePath)
+	probe, err := (media.Probe{Binary: in.Tools["ffprobe"].Path}).File(ctx, m.FilePath)
 	if err != nil {
 		return nil, workflow.NewPermanentError(err)
 	}
@@ -77,7 +77,11 @@ func (e *Engine) extractAudio(ctx context.Context, in downloadedInput, log *os.F
 	path := temp.Name()
 	temp.Close()
 	defer os.Remove(path)
-	cmd := exec.CommandContext(ctx, "ffmpeg", "-nostdin", "-v", "error", "-y", "-i", m.FilePath, "-map", fmt.Sprintf("0:%d", selected.StreamIndex), "-vn", "-ac", "1", "-ar", "16000", "-c:a", "pcm_s16le", path)
+	ffmpeg := in.Tools["ffmpeg"].Path
+	if ffmpeg == "" {
+		ffmpeg = "ffmpeg"
+	}
+	cmd := exec.CommandContext(ctx, ffmpeg, "-nostdin", "-v", "error", "-y", "-i", m.FilePath, "-map", fmt.Sprintf("0:%d", selected.StreamIndex), "-vn", "-ac", "1", "-ar", "16000", "-c:a", "pcm_s16le", path)
 	cmd.Stderr = log
 	if err = executable.Run(ctx, cmd); err != nil {
 		return nil, workflow.NewPermanentError(fmt.Errorf("extract audio: %w (see job logs)", err))

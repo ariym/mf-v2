@@ -57,6 +57,7 @@ func Run(ctx context.Context, c config.Config, instance string, out io.Writer) e
 			return e
 		}
 	}
+	engine.RequestHubURL = c.HubURL
 	if e = engine.Start(); e != nil {
 		return e
 	}

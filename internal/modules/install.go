@@ -132,6 +132,20 @@ func (i Installer) install(ctx context.Context, ref hub.Ref, replace bool) (hub.
 	if e != nil {
 		return plan, e
 	}
+	return i.installResolved(ctx, plan, replace)
+}
+
+// InstallResolved installs exactly the reviewed manifests, without resolving latest again.
+func (i Installer) InstallResolved(ctx context.Context, plan hub.Resolution) (hub.Resolution, error) {
+	if plan.OS != runtime.GOOS || plan.Arch != runtime.GOARCH {
+		return plan, fmt.Errorf("installation plan targets another platform")
+	}
+	if err := hub.ValidateResolution(ctx, plan); err != nil {
+		return plan, err
+	}
+	return i.installResolved(ctx, plan, false)
+}
+func (i Installer) installResolved(ctx context.Context, plan hub.Resolution, replace bool) (hub.Resolution, error) {
 	unlock, e := i.Lock()
 	if e != nil {
 		return plan, e
@@ -280,6 +294,14 @@ func (i Installer) install(ctx context.Context, ref hub.Ref, replace bool) (hub.
 		e = download(ctx, p.artifact.URL, io.MultiWriter(archive, hash))
 		if e != nil {
 			e = fmt.Errorf("download %s/%s@%d: %w", hub.LocalKind(p.module.Kind), p.module.Key, p.module.Version, e)
+		}
+		if e == nil && p.artifact.DownloadBytes != nil {
+			info, err := archive.Stat()
+			if err != nil {
+				e = err
+			} else if info.Size() != *p.artifact.DownloadBytes {
+				e = fmt.Errorf("download size mismatch for %s", p.module.Key)
+			}
 		}
 		if e == nil && hex.EncodeToString(hash.Sum(nil)) != p.artifact.SHA256 {
 			e = fmt.Errorf("SHA-256 mismatch for %s", p.module.Key)

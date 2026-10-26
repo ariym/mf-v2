@@ -20,7 +20,7 @@ func TestV4MigrationFromV3PreservesDraftsAndWorkflowHistory(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err = s.DB.Exec(`DROP TABLE job_dependencies;DROP TABLE audio_artifacts;DROP TABLE job_execution;UPDATE mf_schema_migrations SET version=3`); err != nil {
+	if _, err = s.DB.Exec(`DROP TABLE production_coverage;DROP TABLE media_requests;DROP TABLE job_dependencies;DROP TABLE audio_artifacts;DROP TABLE job_execution;UPDATE mf_schema_migrations SET version=3`); err != nil {
 		t.Fatal(err)
 	}
 	s.Close()

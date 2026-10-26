@@ -83,11 +83,12 @@ type TagType struct {
 	Version  int            `json:"version"`
 }
 type Artifact struct {
-	OS         string `json:"os"`
-	Arch       string `json:"arch"`
-	URL        string `json:"url"`
-	SHA256     string `json:"sha256"`
-	Entrypoint string `json:"entrypoint"`
+	DownloadBytes *int64 `json:"download_bytes,omitempty"`
+	OS            string `json:"os"`
+	Arch          string `json:"arch"`
+	URL           string `json:"url"`
+	SHA256        string `json:"sha256"`
+	Entrypoint    string `json:"entrypoint"`
 }
 type Flow struct {
 	Execution *Execution `json:"execution,omitempty"`
@@ -136,13 +137,22 @@ func (f *MediaInputFormat) UnmarshalJSON(data []byte) error {
 	return nil
 }
 
+type Preparation struct {
+	ReadyArgs     []string `json:"ready_args"`
+	PrepareArgs   []string `json:"prepare_args"`
+	DownloadBytes int64    `json:"download_bytes"`
+	RequiredEnv   []string `json:"required_env,omitempty"`
+	License       string   `json:"license,omitempty"`
+}
+
 type Program struct {
-	ProgramName  string             `json:"program_name"`
-	Version      int                `json:"version"`
-	Desc         string             `json:"desc"`
-	GitRepo      string             `json:"git_repo"`
-	InputFormats []MediaInputFormat `json:"input_formats,omitempty"`
-	Artifacts    []Artifact         `json:"artifacts"`
+	Preparation  map[string]Preparation `json:"preparation,omitempty"`
+	ProgramName  string                 `json:"program_name"`
+	Version      int                    `json:"version"`
+	Desc         string                 `json:"desc"`
+	GitRepo      string                 `json:"git_repo"`
+	InputFormats []MediaInputFormat     `json:"input_formats,omitempty"`
+	Artifacts    []Artifact             `json:"artifacts"`
 }
 type Record struct {
 	Ref          Ref
@@ -257,6 +267,9 @@ func Decode(kind string, data []byte) (Record, error) {
 			err = validateRelease("", v.Desc, v.GitRepo, v.Artifacts, false)
 			if err == nil {
 				err = validateInputFormats(v.InputFormats)
+				if err == nil {
+					err = validatePreparation(v.Preparation)
+				}
 			}
 		}
 		r = Record{Ref: Ref{Programs, v.ProgramName, v.Version}, Value: v}
@@ -406,6 +419,9 @@ func validateRelease(title, desc, repo string, assets []Artifact, needsTitle boo
 	}
 	seen := map[string]bool{}
 	for _, a := range assets {
+		if a.DownloadBytes != nil && *a.DownloadBytes < 0 {
+			return errors.New("download_bytes must be nonnegative")
+		}
 		if (a.OS != "darwin" && a.OS != "linux") || (a.Arch != "amd64" && a.Arch != "arm64") {
 			return errors.New("artifacts support darwin/linux and amd64/arm64")
 		}
@@ -425,5 +441,44 @@ func validateRelease(title, desc, repo string, assets []Artifact, needsTitle boo
 			return errors.New("entrypoint must be a clean relative path within the archive")
 		}
 	}
+	return nil
+}
+
+func validatePreparation(profiles map[string]Preparation) error {
+	for name, p := range profiles {
+		if !ValidIdentifier(name) || len(p.ReadyArgs) == 0 || len(p.PrepareArgs) == 0 || p.DownloadBytes < 0 {
+			return errors.New("preparation requires a valid profile, ready_args, prepare_args and nonnegative download_bytes")
+		}
+		for _, name := range p.RequiredEnv {
+			if !regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`).MatchString(name) {
+				return errors.New("required_env must contain environment variable names")
+			}
+		}
+		for _, args := range [][]string{p.ReadyArgs, p.PrepareArgs, p.RequiredEnv} {
+			for _, a := range args {
+				if strings.ContainsRune(a, 0) {
+					return errors.New("preparation arguments cannot contain NUL")
+				}
+			}
+		}
+	}
+	return nil
+}
+
+func (p *Preparation) UnmarshalJSON(raw []byte) error {
+	type plain Preparation
+	var value plain
+	if err := DecodeStrict(raw, &value); err != nil {
+		return err
+	}
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &fields); err != nil {
+		return err
+	}
+	size, ok := fields["download_bytes"]
+	if !ok || bytes.Equal(bytes.TrimSpace(size), []byte("null")) {
+		return errors.New("preparation requires download_bytes")
+	}
+	*p = Preparation(value)
 	return nil
 }

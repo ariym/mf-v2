@@ -62,12 +62,13 @@ func addClientCommands(root *cobra.Command, c *config.Config, configPath *string
 		if e = store.Migrate(cmd.Context(), c.SQLitePath); e != nil {
 			return e
 		}
-		fmt.Fprintln(cmd.OutOrStdout(), "Database schema is current (v3)")
+		fmt.Fprintln(cmd.OutOrStdout(), "Database schema is current (v5)")
 		return nil
 	}}
 	root.AddCommand(migrate)
 	addHubCommands(root, c, configPath)
 	addModuleCommands(root, c)
+	addRequestCommands(root, c)
 	addAnnotationCommands(root, c)
 	addJobCommands(root, c)
 	addBrowseCommand(root, c)

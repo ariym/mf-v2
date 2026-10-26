@@ -1,6 +1,11 @@
 package hub
 
-import "context"
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"fmt"
+)
 
 type Lookup func(context.Context, Ref) (Record, error)
 
@@ -110,4 +115,59 @@ func Resolve(ctx context.Context, root Record, lookup Lookup, os, arch string) (
 		}
 	}
 	return out, nil
+}
+
+// ValidateResolution verifies an offline, pinned installation plan against its manifests.
+func ValidateResolution(ctx context.Context, plan Resolution) error {
+	records := map[Ref]Record{}
+	add := func(kind string, v any) error {
+		raw, err := json.Marshal(v)
+		if err != nil {
+			return err
+		}
+		r, err := Decode(kind, raw)
+		if err != nil {
+			return err
+		}
+		if _, ok := records[r.Ref]; ok {
+			return fmt.Errorf("duplicate resolution entity %s", r.Ref)
+		}
+		records[r.Ref] = r
+		return nil
+	}
+	for _, v := range plan.TagTypes {
+		if err := add(TagTypes, v); err != nil {
+			return err
+		}
+	}
+	for _, v := range plan.Programs {
+		if err := add(Programs, v.Program); err != nil {
+			return err
+		}
+	}
+	for _, v := range plan.Flows {
+		if err := add(Flows, v.Flow); err != nil {
+			return err
+		}
+	}
+	root, ok := records[plan.Root]
+	if !ok {
+		return fmt.Errorf("resolution root missing")
+	}
+	normalized, err := Resolve(ctx, root, func(_ context.Context, r Ref) (Record, error) {
+		v, ok := records[r]
+		if !ok {
+			return v, fmt.Errorf("resolution missing %s", r)
+		}
+		return v, nil
+	}, plan.OS, plan.Arch)
+	if err != nil {
+		return err
+	}
+	a, _ := json.Marshal(normalized)
+	b, _ := json.Marshal(plan)
+	if !bytes.Equal(a, b) {
+		return fmt.Errorf("resolution differs from exact manifests")
+	}
+	return nil
 }

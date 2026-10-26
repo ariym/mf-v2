@@ -126,3 +126,13 @@ cancelled prerequisite prevents dependent execution; errors identify the job or
 missing output. Saved submissions include original targets and reconstruct the
 segment/media selection when copied. Capabilities report `schema_version: 4`,
 `flow_protocols: [1,2]`, and `builtin_producers: {"extract_audio":1}`.
+
+## Output requests
+
+See [requesting media outputs](requests.md) for approval behavior and manifest contracts.
+
+- `POST /api/v1/requests/plan`: body `{ "tagtypes":["diarized_transcript"], "paths":["/absolute/video.mp4"] }`; alternatively use `segment_ids`. Optional `flow`, per-tag `producers`, and `input` select the producer/options. Returns a read-only plan with exact resolutions, installations, preparation, ordered jobs, output references, candidates/blockers and a fingerprint.
+- `POST /api/v1/requests`: submit the reviewed plan unchanged. The server reconstructs and verifies its work before saving durable intent. Returns `202 {"id":"..."}`; repeating an accepted fingerprint returns the same ID. Stale or unresolved plans return 409.
+- `GET /api/v1/requests/{id}`: returns `setup`, `running`, `completed` or `failed`, saved plan, error, and requested tag results. Unknown IDs return 404.
+- `POST /api/v1/requests/bootstrap/plan`: returns the narrowly scoped FFprobe installation review for uncataloged media.
+- `POST /api/v1/requests/bootstrap`: executes that separately approved bootstrap plan after recomputing and comparing it.

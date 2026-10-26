@@ -246,7 +246,7 @@ func (e *Engine) submitGraph(ctx context.Context, in downloadedInput, paths []st
 				}
 				fingerprints = append(fingerprints, sum)
 			}
-			key := fmt.Sprintf("%x", sha256.Sum256(canonicalJSON([]any{identity, node.Snapshot.Root.Version, node.Snapshot.Entities, node.Targets, json.RawMessage(node.Input), fingerprints})))
+			key := graphIdentity(identity, node.Snapshot.FlowManifests[node.Snapshot.Root.Key], node.Targets, node.Input, fingerprints)
 			var existing string
 			err := tx.QueryRowContext(ctx, `SELECT x.job_id FROM job_execution x JOIN job_metadata j ON j.id=x.job_id WHERE x.dedup_key=? AND x.state IN ('waiting','ready') AND j.cancel_requested=0 AND j.terminal_state IS NULL`, key).Scan(&existing)
 			if err == nil {
@@ -653,12 +653,37 @@ func (e *Engine) dispatchGraph(ctx context.Context) error {
 		if spec == nil {
 			return fmt.Errorf("missing execution contract for %s", p.id)
 		}
+		if err := e.validateBindings(ctx, in); err != nil {
+			if err = e.graphTerminal(ctx, p.id, "failed", err.Error()); err != nil {
+				return err
+			}
+			continue
+		}
 		bindings := []store.Binding{}
 		for ti, t := range in.Targets {
 			for _, req := range spec.Requires {
-				b, err := findBinding(ctx, e.db, t, req)
-				if err != nil {
-					return err
+				var b *store.Binding
+				for _, saved := range in.Bindings {
+					if saved.TargetIndex != ti || saved.Name != req.Name {
+						continue
+					}
+					for _, allowed := range req.AnyOf {
+						if saved.Kind == allowed.Kind && saved.Key == allowed.Key && saved.Version == allowed.Version {
+							copy := saved
+							b = &copy
+							break
+						}
+					}
+					if b != nil {
+						break
+					}
+				}
+				if b == nil {
+					var err error
+					b, err = findBinding(ctx, e.db, t, req)
+					if err != nil {
+						return err
+					}
 				}
 				if b == nil {
 					failure = fmt.Sprintf("prerequisite output %s unavailable after producer completed", req.Name)

@@ -71,6 +71,9 @@ func initialize(db *sql.DB) error {
 	if _, e := db.Exec(schemaV4); e != nil {
 		return e
 	}
+	if _, e := db.Exec(schemaV5); e != nil {
+		return e
+	}
 	b := wsqlite.NewSqliteBackendWithDB(db, wsqlite.WithBackendOptions(backend.WithLogger(slog.New(slog.NewTextHandler(io.Discard, nil)))))
 	return b.Migrate()
 }
@@ -140,7 +143,7 @@ func schemaObjects(db *sql.DB) (map[string]string, error) {
 	}
 	return out, rows.Err()
 }
-func Validate(db *sql.DB) error { return validateVersion(db, 4) }
+func Validate(db *sql.DB) error { return validateVersion(db, 5) }
 func validateVersion(db *sql.DB, expected int) error {
 	var v int
 	if e := db.QueryRow("SELECT version FROM mf_schema_migrations").Scan(&v); e != nil {
@@ -181,6 +184,9 @@ func validateVersion(db *sql.DB, expected int) error {
 		return e
 	}
 	for name, definition := range baseline.objects {
+		if expected < 5 && v5Objects[name] {
+			continue
+		}
 		if expected < 4 && v4Objects[name] {
 			continue
 		}

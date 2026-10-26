@@ -199,6 +199,12 @@ func removeModule(ctx context.Context, q queryer, kind, key string) error {
 		return e
 	}
 	var count int
+	if e = q.QueryRowContext(ctx, `SELECT count(*) FROM media_requests r,json_each(r.plan,'$.resolutions') p,json_each(p.value,'$.order') pin WHERE r.state IN ('setup','running') AND json_extract(pin.value,'$.kind')=? AND json_extract(pin.value,'$.identifier')=?`, hub.WireKind(kind), key).Scan(&count); e != nil {
+		return e
+	}
+	if count > 0 {
+		return fmt.Errorf("%s %s is pinned by unfinished requests", kind, key)
+	}
 	if e = q.QueryRowContext(ctx, `SELECT count(*) FROM job_modules jm JOIN job_metadata j ON j.id=jm.job_id LEFT JOIN instances i ON i.id=j.id WHERE jm.kind=? AND jm.key=? AND j.terminal_state IS NULL AND (j.submitted=0 OR i.id IS NULL OR i.state=0)`, kind, key).Scan(&count); e != nil {
 		return e
 	}

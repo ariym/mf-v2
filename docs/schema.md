@@ -1,4 +1,4 @@
-# Client schema v4
+# Client schema v5
 
 The hub's **tag** is a schema definition. In the client, this is always a **tag type** (`TagType`, the `tagtype` table, and the `tagtypes` CLI group). A client **tag** (`Tag`, the `tag` table, and the `tags` CLI group) is an instantiation containing a validated value. Hub transport manifests retain the hub's `tags` spelling; client definition/plan output translates it to `tag_types`. Instance values and embedded JSON schemas are never renamed.
 
@@ -10,7 +10,7 @@ mf migrate
 mf daemon start
 ```
 
-Stop foreground servers too. `mf migrate` acquires the same exclusive database lock as the server. It validates the complete v1, v2, or v3 application and workflow schema before applying a transactional additive migration. Media IDs, file metadata, timestamps, and durable workflow records remain intact. Running it on v4 validates without changing the schema. Foreign, modified, or future schemas are rejected. Normal commands never migrate automatically. `mf init` creates v4 for a new database. Schema v3 added `manifest_drafts` and `job_definitions`, each with an ID, name, editable document text, and audit timestamps. Drafts are separate from installed immutable manifests and execution snapshots.
+Stop foreground servers too. `mf migrate` acquires the same exclusive database lock as the server. It validates the complete v1, v2, v3, or v4 application and workflow schema before applying a transactional additive migration. Media IDs, file metadata, timestamps, and durable workflow records remain intact. Running it on v5 validates without changing the schema. Foreign, modified, or future schemas are rejected. Normal commands never migrate automatically. `mf init` creates v5 for a new database. Schema v3 added `manifest_drafts` and `job_definitions`, each with an ID, name, editable document text, and audit timestamps. Drafts are separate from installed immutable manifests and execution snapshots.
 
 ## Entities
 
@@ -26,6 +26,8 @@ Stop foreground servers too. `mf migrate` acquires the same exclusive database l
 | `job_metadata` | Stable job ID, flow identity, input, persisted execution snapshot, paths, submission/cancellation/ingestion flags and terminal status |
 | `job_media`, `job_modules` | Media associations and exact module/definition pins for durable jobs |
 | `install_journal` | Staged/final/previous path ownership for installation and replacement recovery |
+| `media_requests` | Approved request fingerprint, exact plan, setup/execution state, errors and timestamps |
+| `production_coverage` | Successful source/range/tag-type coverage and output digests, including zero-event results |
 | `manifest_drafts`, `job_definitions` | Editable draft names, document text, and UTC audit timestamps |
 
 Definition fields such as `data_type`, `format`, title and description are preserved inside `tagtype.manifest`. Query them with SQLite JSON functions. The client never stores hub definitions in `tag`.

@@ -55,7 +55,7 @@ func TestTagFormats(t *testing.T) {
 	}
 }
 func asset() Artifact {
-	return Artifact{"linux", "amd64", "https://github.com/example/repo/releases/download/v1/tool.tar.gz", strings.Repeat("a", 64), "bin/tool"}
+	return Artifact{OS: "linux", Arch: "amd64", URL: "https://github.com/example/repo/releases/download/v1/tool.tar.gz", SHA256: strings.Repeat("a", 64), Entrypoint: "bin/tool"}
 }
 func TestReleaseValidation(t *testing.T) {
 	base := Program{

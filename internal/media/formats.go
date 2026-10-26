@@ -33,3 +33,6 @@ func expectedMediaExtension(path string) bool {
 	}
 	return KnownExtension(path)
 }
+
+// ExpectedMediaExtension controls errors during directory scans; explicit files are always probed.
+func ExpectedMediaExtension(path string) bool { return expectedMediaExtension(path) }
