@@ -53,9 +53,9 @@ func TestClientRoutesAndTerminology(t *testing.T) {
 		}
 	}
 }
-func TestAudioFixtureSchemasAndValues(t *testing.T) {
+func TestMediaFixtureSchemasAndValues(t *testing.T) {
 	files, e := filepath.Glob("testdata/*.json")
-	if e != nil || len(files) != 5 {
+	if e != nil || len(files) != 7 {
 		t.Fatalf("fixtures: %v %v", files, e)
 	}
 	for _, file := range files {

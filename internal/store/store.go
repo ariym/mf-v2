@@ -65,6 +65,9 @@ func initialize(db *sql.DB) error {
 	if _, e := db.Exec(schemaV2); e != nil {
 		return e
 	}
+	if _, e := db.Exec(schemaV3); e != nil {
+		return e
+	}
 	b := wsqlite.NewSqliteBackendWithDB(db, wsqlite.WithBackendOptions(backend.WithLogger(slog.New(slog.NewTextHandler(io.Discard, nil)))))
 	return b.Migrate()
 }
@@ -134,15 +137,15 @@ func schemaObjects(db *sql.DB) (map[string]string, error) {
 	}
 	return out, rows.Err()
 }
-func Validate(db *sql.DB) error { return validateVersion(db, 2) }
+func Validate(db *sql.DB) error { return validateVersion(db, 3) }
 func validateVersion(db *sql.DB, expected int) error {
 	var v int
 	if e := db.QueryRow("SELECT version FROM mf_schema_migrations").Scan(&v); e != nil {
 		return fmt.Errorf("missing or invalid mf_schema_migrations: %w", e)
 	}
 	if v != expected {
-		if v == 1 && expected == 2 {
-			return fmt.Errorf("database schema 1 requires migration; stop the server and run mf migrate")
+		if v > 0 && v < expected {
+			return fmt.Errorf("database schema %d requires migration; stop the server and run mf migrate", v)
 		}
 		return fmt.Errorf("unsupported schema version %d; executable expects %d", v, expected)
 	}
@@ -175,6 +178,9 @@ func validateVersion(db *sql.DB, expected int) error {
 		return e
 	}
 	for name, definition := range baseline.objects {
+		if expected < 3 && v3Objects[name] {
+			continue
+		}
 		if expected == 1 && v2Objects[name] {
 			continue
 		}

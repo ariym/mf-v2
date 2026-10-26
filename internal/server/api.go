@@ -25,6 +25,7 @@ func apiError(w http.ResponseWriter, status int, e error) {
 }
 func API(c config.Config, s *store.Store, j *jobs.Engine) http.Handler {
 	mux := http.NewServeMux()
+	workspaceAPI(mux, c, s, j)
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) {
 		if e := s.Ping(r.Context()); e != nil {
 			apiError(w, 503, e)

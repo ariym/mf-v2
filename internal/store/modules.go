@@ -92,8 +92,16 @@ func (s *Store) RegisterInstall(ctx context.Context, defs []hub.TagType, modules
 		return e
 	}
 	defer tx.Rollback()
+	if e = registerInstall(ctx, tx, defs, modules, journalID, source); e != nil {
+		return e
+	}
+	return tx.Commit()
+}
+
+func registerInstall(ctx context.Context, q queryer, defs []hub.TagType, modules []Module, journalID, source string) error {
+	var e error
 	for _, def := range defs {
-		if e = insertTagType(ctx, tx, def, source); e != nil {
+		if e = insertTagType(ctx, q, def, source); e != nil {
 			return e
 		}
 	}
@@ -104,7 +112,7 @@ func (s *Store) RegisterInstall(ctx context.Context, defs []hub.TagType, modules
 		}
 		var raw string
 		var version int
-		e = tx.QueryRowContext(ctx, "SELECT version,manifest FROM "+table+" WHERE key=?", m.Key).Scan(&version, &raw)
+		e = q.QueryRowContext(ctx, "SELECT version,manifest FROM "+table+" WHERE key=?", m.Key).Scan(&version, &raw)
 		if e == nil {
 			if version != m.Version || !SameJSON([]byte(raw), m.Manifest) {
 				return fmt.Errorf("%s %s conflicts with installed version", m.Kind, m.Key)
@@ -114,19 +122,67 @@ func (s *Store) RegisterInstall(ctx context.Context, defs []hub.TagType, modules
 		if e != sql.ErrNoRows {
 			return e
 		}
-		_, e = tx.ExecContext(ctx, "INSERT INTO "+table+"(key,version,manifest,source,install_dir,executable,platform_os,platform_arch,artifact_sha256,created_at,modified_at) VALUES(?,?,?,?,?,?,?,?,?,?,?)", m.Key, m.Version, string(m.Manifest), m.Source, m.InstallDir, m.Executable, m.OS, m.Arch, m.ArtifactSHA256, now(), now())
+		_, e = q.ExecContext(ctx, "INSERT INTO "+table+"(key,version,manifest,source,install_dir,executable,platform_os,platform_arch,artifact_sha256,created_at,modified_at) VALUES(?,?,?,?,?,?,?,?,?,?,?)", m.Key, m.Version, string(m.Manifest), m.Source, m.InstallDir, m.Executable, m.OS, m.Arch, m.ArtifactSHA256, now(), now())
 		if e != nil {
 			return e
 		}
 	}
 	if journalID != "" {
-		if _, e = tx.ExecContext(ctx, "DELETE FROM install_journal WHERE id=?", journalID); e != nil {
+		if _, e = q.ExecContext(ctx, "DELETE FROM install_journal WHERE id=?", journalID); e != nil {
 			return e
 		}
 	}
-	return tx.Commit()
+	return nil
 }
 func (s *Store) RemoveModule(ctx context.Context, kind, key string) error {
+	tx, e := s.DB.BeginTx(ctx, nil)
+	if e != nil {
+		return e
+	}
+	defer tx.Rollback()
+	if e = removeModule(ctx, tx, kind, key); e != nil {
+		return e
+	}
+	return tx.Commit()
+}
+
+// RegisterReplacement keeps old registrations intact if any dependency check or write fails.
+func (s *Store) RegisterReplacement(ctx context.Context, defs []hub.TagType, modules []Module, journalID, source string, replacements []hub.Ref) error {
+	tx, e := s.DB.BeginTx(ctx, nil)
+	if e != nil {
+		return e
+	}
+	defer tx.Rollback()
+	for n := len(replacements) - 1; n >= 0; n-- {
+		r := replacements[n]
+		if e = removeModule(ctx, tx, r.Kind, r.Identifier); e != nil {
+			return e
+		}
+	}
+	if e = registerInstall(ctx, tx, defs, modules, journalID, source); e != nil {
+		return e
+	}
+	return tx.Commit()
+}
+
+// CheckReplacement preflights removability without changing the installed state.
+// RegisterReplacement repeats these checks under its commit transaction.
+func (s *Store) CheckReplacement(ctx context.Context, replacements []hub.Ref) error {
+	tx, err := s.DB.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	for n := len(replacements) - 1; n >= 0; n-- {
+		r := replacements[n]
+		if err = removeModule(ctx, tx, r.Kind, r.Identifier); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func removeModule(ctx context.Context, q queryer, kind, key string) error {
 	kind = hub.LocalKind(hub.WireKind(kind))
 	var table string
 	var e error
@@ -138,25 +194,28 @@ func (s *Store) RemoveModule(ctx context.Context, kind, key string) error {
 			return e
 		}
 	}
-	tx, e := s.DB.BeginTx(ctx, nil)
-	if e != nil {
-		return e
-	}
-	defer tx.Rollback()
 	var version int
-	if e = tx.QueryRowContext(ctx, "SELECT version FROM "+table+" WHERE key=?", key).Scan(&version); e != nil {
+	if e = q.QueryRowContext(ctx, "SELECT version FROM "+table+" WHERE key=?", key).Scan(&version); e != nil {
 		return e
 	}
 	var count int
-	if e = tx.QueryRowContext(ctx, `SELECT count(*) FROM job_modules jm JOIN job_metadata j ON j.id=jm.job_id LEFT JOIN instances i ON i.id=j.id WHERE jm.kind=? AND jm.key=? AND j.terminal_state IS NULL AND (j.submitted=0 OR i.id IS NULL OR i.state=0)`, kind, key).Scan(&count); e != nil {
+	if e = q.QueryRowContext(ctx, `SELECT count(*) FROM job_modules jm JOIN job_metadata j ON j.id=jm.job_id LEFT JOIN instances i ON i.id=j.id WHERE jm.kind=? AND jm.key=? AND j.terminal_state IS NULL AND (j.submitted=0 OR i.id IS NULL OR i.state=0)`, kind, key).Scan(&count); e != nil {
 		return e
 	}
 	if count > 0 {
 		return fmt.Errorf("%s %s is pinned by unfinished jobs", kind, key)
 	}
+	if kind == "tagtypes" {
+		if e = q.QueryRowContext(ctx, "SELECT count(*) FROM tag WHERE tag_type_id=(SELECT id FROM tagtype WHERE key=?)", key).Scan(&count); e != nil {
+			return e
+		}
+		if count > 0 {
+			return fmt.Errorf("tag type %s is used by %d tag instances; keep its installed version", key, count)
+		}
+	}
 	// Definitions and flows retain exact dependency pins in immutable manifests.
 	for _, owner := range []string{"tagtype", "flow"} {
-		rows, e := tx.QueryContext(ctx, "SELECT key,manifest FROM "+owner)
+		rows, e := q.QueryContext(ctx, "SELECT key,manifest FROM "+owner)
 		if e != nil {
 			return e
 		}
@@ -188,8 +247,8 @@ func (s *Store) RemoveModule(ctx context.Context, kind, key string) error {
 			return e
 		}
 	}
-	if _, e = tx.ExecContext(ctx, "DELETE FROM "+table+" WHERE key=?", key); e != nil {
+	if _, e = q.ExecContext(ctx, "DELETE FROM "+table+" WHERE key=?", key); e != nil {
 		return fmt.Errorf("cannot remove referenced %s: %w", kind, e)
 	}
-	return tx.Commit()
+	return nil
 }

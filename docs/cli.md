@@ -1,12 +1,12 @@
 # CLI reference
 
-All commands accept `--config /path/to/mf.yaml`; otherwise configuration is read from the invoking directory. Relative SQLite/module paths resolve beside that config. Relative CLI media/output paths resolve from the invoking working directory. `mf help <command>` describes command flags. Hub listings use a table by default (`--json` for scripts). Other structured catalog, annotation and job inspection output is JSON; ID-producing commands print the new ID.
+All commands accept `--config /path/to/mf.yaml`; otherwise configuration is read from the invoking directory. Relative SQLite/module paths resolve beside that config. Relative CLI media/output paths resolve from the invoking working directory. `mf help <command>` describes command flags. Structured hub, module, annotation and job output uses formatted tables or labeled lists by default. Pass `--json` for the full raw JSON response, for example `mf jobs list --json` or `mf tags show 1 --json`. List tables summarize long values; `show` displays complete details. ID-producing commands print the new ID; job submission with `--json` returns an ID object, or one final job object with `--wait`. Logs, executable paths and program I/O retain their text output.
 
 ## Initialization and server
 
 | Command | Behavior |
 | --- | --- |
-| `mf init [-y]` | Create config and a new schema-v2 database; `-y` accepts defaults |
+| `mf init [-y]` | Create config and a new schema-v3 database; `-y` accepts defaults |
 | `mf migrate` | Upgrade a validated v1 database with the server stopped |
 | `mf version` | Print executable version |
 | `mf update` | Check GitHub for a newer release and print a curl command to update the executable in its installation directory; works without config |
@@ -76,6 +76,7 @@ mf jobs run infer_audio_events . --input '{"options":{}}'
 mf jobs run train_custom_speaker ./enrollment \
   --input '{"voice_id":"alice","label":"Alice"}'
 mf jobs list /media --state completed
+mf jobs list /media --state completed --json
 mf jobs show <id>
 mf jobs logs <id> --follow
 mf jobs cancel <id>
@@ -96,6 +97,8 @@ mf jobs retry <id>
 Both `run` and `submit` accept `--input '{}'` (JSON or `@file`), `--output-dir PATH`, and `--wait`. `run` gathers the current recursive scan into one job, supplies absolute `input.media`, and defaults `input.output_dir` to `<database>.mf/results`. It includes file symlinks, skips deleted historical catalog records, and excludes bundled module directories and database state from recursive scans. Its input must not also supply `media`. `submit` passes its input through without that convention; any media used for result association must already be imported. Additional options/profile paths follow each flow's own input schema. Built-in `import_media` accepts one file/directory via `jobs run`.
 
 Explicit cancellation differs from forced daemon shutdown: cancelled jobs do not resume. Retry produces a new job ID. Inspecting existing jobs requires the server to be running; submission, cancellation and retry start it when needed. Captured per-job logs are available for downloaded flows; compiled built-in activities retain their existing server diagnostics.
+
+For local face matcher training, enrollment, and held-out accuracy evaluation with the linked InsightFace program, see [face accuracy testing](face-accuracy.md).
 
 ## Two-pane browser
 

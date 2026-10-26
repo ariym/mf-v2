@@ -1,4 +1,4 @@
-# Client schema v2
+# Client schema v3
 
 The hub's **tag** is a schema definition. In the client, this is always a **tag type** (`TagType`, the `tagtype` table, and the `tagtypes` CLI group). A client **tag** (`Tag`, the `tag` table, and the `tags` CLI group) is an instantiation containing a validated value. Hub transport manifests retain the hub's `tags` spelling; client definition/plan output translates it to `tag_types`. Instance values and embedded JSON schemas are never renamed.
 
@@ -10,7 +10,7 @@ mf migrate
 mf daemon start
 ```
 
-Stop foreground servers too. `mf migrate` acquires the same exclusive database lock as the server. It validates the complete v1 application and workflow schema before applying a transactional additive migration. Media IDs, file metadata, timestamps, and durable workflow records remain intact. Running it on v2 validates without changing the schema. Foreign, modified, or future schemas are rejected. Normal commands never migrate automatically. `mf init` creates v2 for a new database.
+Stop foreground servers too. `mf migrate` acquires the same exclusive database lock as the server. It validates the complete v1 or v2 application and workflow schema before applying a transactional additive migration. Media IDs, file metadata, timestamps, and durable workflow records remain intact. Running it on v3 validates without changing the schema. Foreign, modified, or future schemas are rejected. Normal commands never migrate automatically. `mf init` creates v3 for a new database. Schema v3 adds `manifest_drafts` and `job_definitions`, each with an ID, name, editable document text, and audit timestamps. Drafts are separate from installed immutable manifests and execution snapshots.
 
 ## Entities
 
@@ -25,7 +25,8 @@ Stop foreground servers too. `mf migrate` acquires the same exclusive database l
 | `flow`, `program` | Local ID, unique key, exact version, JSON manifest, source, installation directory, executable, selected OS/architecture and artifact SHA-256, audit timestamps |
 | `job_metadata` | Stable job ID, flow identity, input, persisted execution snapshot, paths, submission/cancellation/ingestion flags and terminal status |
 | `job_media`, `job_modules` | Media associations and exact module/definition pins for durable jobs |
-| `install_journal` | Staged/final path ownership for recovery before database registration |
+| `install_journal` | Staged/final/previous path ownership for installation and replacement recovery |
+| `manifest_drafts`, `job_definitions` | Editable draft names, document text, and UTC audit timestamps |
 
 Definition fields such as `data_type`, `format`, title and description are preserved inside `tagtype.manifest`. Query them with SQLite JSON functions. The client never stores hub definitions in `tag`.
 
@@ -53,15 +54,27 @@ Instances support `string`, `number`, `boolean`, `tag_set`, and `json`. Primitiv
 
 ## Flow result ingestion
 
-Protocol-v1 results may contain any JSON. Results with a `tags` array must identify each instance with `key`, exact `version`, and `value`. `media_path`, embedded `media.path`, or an unambiguous submitted file associates the result with media. Voice profiles can reference several enrollment files. Results referring to unknown media, unpinned definitions, invalid values or invalid ranges fail without partial writes.
+Protocol-v1 results may contain any JSON. Results with a `tags` array must identify each instance with `key`, exact `version`, and `value`. `media_path`, embedded `media.path`, or an unambiguous submitted file associates the result with media. Voice profiles and `face_profile@1` can reference several enrollment files through `examples[].media.path`; one shared profile instance links to all submitted enrollment files. Reference photos remain provenance and need not be imported. Results referring to unknown media, unpinned definitions, invalid values or invalid ranges fail without partial writes.
 
 Complete JSON values remain intact, including unknown upstream fields and artifact references. Each attaches to a whole-file segment. Known timed projections are linked without duplicating those values:
+
+Flows deriving results from existing tags may supply `source_tag_id` and
+`source_value_sha256` instead of `media_path`. The digest is the lowercase SHA-256
+of the exact UTF-8 JSON text in the source tag's `value` column. Both fields are
+required together; the source's exact tag type/version must be pinned by the flow.
+Ingestion checks that the source still exists and its digest matches, then attaches
+the result to the source's whole-value links (`value_pointer = ''`). Source event
+pointers are not copied to the new value. The derived job also gains the source
+media associations. Validation and writes share the ingestion transaction; changed
+or deleted sources fail without partial tags or links. These results need no
+submitted media files and are suitable for raw `mf jobs submit` calls.
 
 | Tag type | Timed projection |
 | --- | --- |
 | `speech@2` | `/transcript/segments` |
 | `speaker@2` | `/diarization` |
 | `audio_events@1` | `/events` |
+| `face_tracks@1` | `/tracks` |
 | `diarized_transcript@2` | Nested speech segments and speaker diarization |
 
 Both start and end must be supplied to create a timed projection. Missing/null event timestamps are not invented. Whole-file attachment requires a known positive duration. A stable job/result key and ingestion flag make retries idempotent.

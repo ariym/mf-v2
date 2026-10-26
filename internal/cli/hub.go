@@ -15,6 +15,13 @@ import (
 	"github.com/spf13/cobra"
 )
 
+func printHubPage(cmd *cobra.Command, kind string, page hub.Page) error {
+	if jsonOutput(cmd) {
+		return printOutput(cmd, hub.ClientView(page))
+	}
+	return printHubTable(cmd.OutOrStdout(), kind, page)
+}
+
 func printHubTable(out io.Writer, kind string, page hub.Page) error {
 	entries, err := hub.Entries(kind, page)
 	if err != nil {

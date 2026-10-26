@@ -34,6 +34,7 @@ type Installer struct {
 type installPath struct {
 	Stage string `json:"stage"`
 	Final string `json:"final"`
+	Old   string `json:"old,omitempty"`
 }
 
 func (i *Installer) Lock() (func(), error) {
@@ -102,6 +103,13 @@ func (i Installer) recover(ctx context.Context) error {
 				if e = os.RemoveAll(p.Final); e != nil {
 					return e
 				}
+			} else if p.Old != "" {
+				if !within(i.Root, p.Old) {
+					return fmt.Errorf("invalid replacement journal path")
+				}
+				if e = os.RemoveAll(p.Old); e != nil {
+					return e
+				}
 			}
 		}
 		if _, e = i.Store.DB.ExecContext(ctx, "DELETE FROM install_journal WHERE id=?", v.id); e != nil {
@@ -111,6 +119,15 @@ func (i Installer) recover(ctx context.Context) error {
 	return nil
 }
 func (i Installer) Install(ctx context.Context, ref hub.Ref) (hub.Resolution, error) {
+	return i.install(ctx, ref, false)
+}
+
+// Update stages all artifacts before atomically replacing unused registrations.
+func (i Installer) Update(ctx context.Context, ref hub.Ref) (hub.Resolution, error) {
+	return i.install(ctx, ref, true)
+}
+
+func (i Installer) install(ctx context.Context, ref hub.Ref, replace bool) (hub.Resolution, error) {
 	plan, e := i.Hub.Resolve(ctx, ref, runtime.GOOS, runtime.GOARCH)
 	if e != nil {
 		return plan, e
@@ -124,6 +141,8 @@ func (i Installer) Install(ctx context.Context, ref hub.Ref) (hub.Resolution, er
 		return plan, e
 	}
 	// Check the complete plan before downloading anything.
+	replacing := map[string]hub.Ref{}
+	oldPaths := map[string]string{}
 	var defs []hub.TagType
 	for _, def := range plan.TagTypes {
 		existing, e := i.Store.Definition(ctx, def.Key, 0)
@@ -131,7 +150,11 @@ func (i Installer) Install(ctx context.Context, ref hub.Ref) (hub.Resolution, er
 			a, _ := json.Marshal(existing)
 			b, _ := json.Marshal(def)
 			if !store.SameJSON(a, b) {
-				return plan, fmt.Errorf("tag type %s conflicts with installed version", def.Key)
+				if !replace || existing.Version == def.Version {
+					return plan, fmt.Errorf("tag type %s conflicts with installed version", def.Key)
+				}
+				r := hub.Ref{Kind: hub.TagTypes, Identifier: def.Key, Version: def.Version}
+				replacing[r.Kind+"/"+r.Identifier] = r
 			}
 		} else if !errors.Is(e, sql.ErrNoRows) {
 			return plan, e
@@ -173,6 +196,15 @@ func (i Installer) Install(ctx context.Context, ref hub.Ref) (hub.Resolution, er
 		m := store.Module{Kind: r.Kind, Key: r.Identifier, Version: r.Version, Manifest: raw, Source: i.Hub.URL, InstallDir: final, Executable: filepath.Join(final, filepath.FromSlash(artifact.Entrypoint)), OS: artifact.OS, Arch: artifact.Arch, ArtifactSHA256: artifact.SHA256}
 		old, e := i.Store.Module(ctx, r.Kind, r.Identifier)
 		if e == nil {
+			if replace && old.Version != m.Version {
+				replacing[r.Kind+"/"+r.Identifier] = r
+				if old.InstallDir != "" {
+					oldPaths[m.InstallDir] = old.InstallDir
+				}
+				all = append(all, m)
+				pendingModules = append(pendingModules, pending{m, artifact})
+				continue
+			}
 			if old.OS != "" && (old.OS != artifact.OS || old.Arch != artifact.Arch || old.ArtifactSHA256 != artifact.SHA256) {
 				return plan, fmt.Errorf("%s %s was installed for a different platform or artifact", r.Kind, r.Identifier)
 			}
@@ -192,6 +224,15 @@ func (i Installer) Install(ctx context.Context, ref hub.Ref) (hub.Resolution, er
 		pendingModules = append(pendingModules, pending{m, artifact})
 	}
 	paths := []installPath{}
+	replacements := []hub.Ref{}
+	for _, r := range plan.Order {
+		if v, ok := replacing[r.Kind+"/"+r.Identifier]; ok {
+			replacements = append(replacements, v)
+		}
+	}
+	if e = i.Store.CheckReplacement(ctx, replacements); e != nil {
+		return plan, e
+	}
 	journalID := uuid.NewString()
 	registered := false
 	defer func() {
@@ -214,7 +255,7 @@ func (i Installer) Install(ctx context.Context, ref hub.Ref) (hub.Resolution, er
 			return plan, e
 		}
 		stage := filepath.Join(parent, ".stage-"+journalID)
-		paths = append(paths, installPath{stage, p.module.InstallDir})
+		paths = append(paths, installPath{Stage: stage, Final: p.module.InstallDir, Old: oldPaths[p.module.InstallDir]})
 	}
 	if len(paths) > 0 {
 		raw, _ := json.Marshal(paths)
@@ -268,10 +309,21 @@ func (i Installer) Install(ctx context.Context, ref hub.Ref) (hub.Resolution, er
 			return plan, e
 		}
 	}
-	if e = i.Store.RegisterInstall(ctx, defs, all, journalID, i.Hub.URL); e != nil {
+	if e = i.Store.RegisterReplacement(ctx, defs, all, "", i.Hub.URL, replacements); e != nil {
 		return plan, e
 	}
 	registered = true
+	cleaned := true
+	for _, p := range paths {
+		if p.Old != "" && within(i.Root, p.Old) {
+			if e = os.RemoveAll(p.Old); e != nil {
+				cleaned = false
+			}
+		}
+	}
+	if cleaned {
+		_, _ = i.Store.DB.ExecContext(ctx, "DELETE FROM install_journal WHERE id=?", journalID)
+	}
 	return plan, nil
 }
 func Executable(path string) error {

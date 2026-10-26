@@ -30,7 +30,7 @@ func addAnnotationCommands(root *cobra.Command, c *config.Config) {
 		if e != nil {
 			return e
 		}
-		return printJSON(cmd.OutOrStdout(), v)
+		return printOutput(cmd, v)
 	}})
 	segments.AddCommand(&cobra.Command{Use: "show <id>", Short: "Show a segment and its tag instance IDs", Args: cobra.ExactArgs(1), RunE: func(cmd *cobra.Command, args []string) error {
 		id, e := numericID(args[0])
@@ -46,7 +46,7 @@ func addAnnotationCommands(root *cobra.Command, c *config.Config) {
 		if e != nil {
 			return e
 		}
-		return printJSON(cmd.OutOrStdout(), v)
+		return printOutput(cmd, v)
 	}})
 	segments.AddCommand(&cobra.Command{Use: "add <file> <start> <end>", Short: "Add a segment, automatically importing the file", Args: cobra.ExactArgs(3), RunE: func(cmd *cobra.Command, args []string) error {
 		s, e := openStore(c)
@@ -109,7 +109,7 @@ func addAnnotationCommands(root *cobra.Command, c *config.Config) {
 		if e != nil {
 			return e
 		}
-		return printJSON(cmd.OutOrStdout(), v)
+		return printOutput(cmd, v)
 	}})
 	tags.AddCommand(&cobra.Command{Use: "show <id>", Short: "Show a tag instance and its shared segment links", Args: cobra.ExactArgs(1), RunE: func(cmd *cobra.Command, args []string) error {
 		id, e := numericID(args[0])
@@ -127,7 +127,7 @@ func addAnnotationCommands(root *cobra.Command, c *config.Config) {
 		}
 		for _, v := range values {
 			if v.ID == id {
-				return printJSON(cmd.OutOrStdout(), v)
+				return printOutput(cmd, v)
 			}
 		}
 		return sql.ErrNoRows

@@ -199,7 +199,7 @@ func TestInstallConflictRecoveryAndRemoval(t *testing.T) {
 	if e = os.MkdirAll(final, 0700); e != nil {
 		t.Fatal(e)
 	}
-	raw, _ := json.Marshal([]installPath{{stage, final}})
+	raw, _ := json.Marshal([]installPath{{Stage: stage, Final: final}})
 	if _, e = s.DB.Exec("INSERT INTO install_journal VALUES('interrupted',?,'now')", string(raw)); e != nil {
 		t.Fatal(e)
 	}

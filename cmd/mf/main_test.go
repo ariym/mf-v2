@@ -333,7 +333,7 @@ func TestClientCLIAnnotationsRenderingAndPathJobs(t *testing.T) {
 	f.must(t, "tagtypes", "add", definition)
 	segment := strings.TrimSpace(f.must(t, "segments", "add", audio, "00:00:00.1", "00:00:00.6"))
 	tag := strings.TrimSpace(f.must(t, "tags", "add", "confidence@1", "--segment", segment, "--value", "0.9"))
-	if !strings.Contains(f.must(t, "tags", "show", tag), `"tag_type_key": "confidence"`) {
+	if !strings.Contains(f.must(t, "tags", "show", tag, "--json"), `"tag_type_key": "confidence"`) {
 		t.Fatal("wrong tag terminology")
 	}
 	rendered := filepath.Join(f.dir, "render.mp3")
@@ -350,12 +350,24 @@ func TestClientCLIAnnotationsRenderingAndPathJobs(t *testing.T) {
 		t.Fatalf("program passthrough %s", out)
 	}
 	// This starts the daemon implicitly, and compiled imports remain path-filterable.
-	out = f.must(t, "jobs", "run", "import_media", audio, "--wait")
-	if !strings.Contains(out, `"state": "completed"`) {
+	ctx, cancel := context.WithTimeout(context.Background(), 25*time.Second)
+	defer cancel()
+	jobCmd := exec.CommandContext(ctx, testBinary, "jobs", "run", "import_media", audio, "--wait", "--json")
+	jobCmd.Dir = f.dir
+	jobCmd.Env = f.env
+	var diagnostics bytes.Buffer
+	jobCmd.Stderr = &diagnostics
+	jobOutput, err := jobCmd.Output()
+	if err != nil {
+		t.Fatalf("job submission: %v\n%s", err, diagnostics.String())
+	}
+	out = string(jobOutput)
+	var completed jobs.Job
+	if err := json.Unmarshal([]byte(out), &completed); err != nil || completed.State != "completed" {
 		t.Fatalf("job %s", out)
 	}
 	out = f.must(t, "jobs", "list", audio)
-	if !strings.Contains(out, `"flow": "import_media"`) {
+	if !strings.Contains(out, "FLOW") || !strings.Contains(out, "import_media") || json.Valid([]byte(out)) {
 		t.Fatalf("path jobs %s", out)
 	}
 	f.must(t, "daemon", "stop")

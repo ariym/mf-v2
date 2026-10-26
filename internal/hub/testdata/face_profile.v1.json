@@ -1,0 +1,123 @@
+{
+  "key": "face_profile",
+  "version": 1,
+  "title": "Face Profile",
+  "desc": "Portable offline AuraFace face profile.",
+  "data_type": "json",
+  "format": {
+    "schema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object",
+      "required": [
+        "schema_version",
+        "person_id",
+        "label",
+        "embedding_space",
+        "embedding",
+        "examples",
+        "reference",
+        "provenance"
+      ],
+      "properties": {
+        "schema_version": {
+          "const": 1
+        },
+        "person_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "label": {
+          "type": "string",
+          "minLength": 1
+        },
+        "embedding_space": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
+        },
+        "embedding": {
+          "type": "array",
+          "minItems": 512,
+          "maxItems": 512,
+          "items": {
+            "type": "number"
+          }
+        },
+        "examples": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "object",
+            "required": [
+              "media",
+              "embedding",
+              "track_ids"
+            ],
+            "properties": {
+              "media": {
+                "type": "object",
+                "required": [
+                  "path",
+                  "sha256"
+                ],
+                "properties": {
+                  "path": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "sha256": {
+                    "type": "string",
+                    "pattern": "^[a-f0-9]{64}$"
+                  },
+                  "stream_index": {
+                    "type": "integer",
+                    "minimum": 0
+                  }
+                }
+              },
+              "embedding": {
+                "type": "array",
+                "minItems": 512,
+                "maxItems": 512,
+                "items": {
+                  "type": "number"
+                }
+              },
+              "track_ids": {
+                "type": "array",
+                "minItems": 1,
+                "items": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              }
+            }
+          }
+        },
+        "reference": {
+          "type": "object",
+          "required": [
+            "path",
+            "sha256"
+          ],
+          "properties": {
+            "path": {
+              "type": "string",
+              "minLength": 1
+            },
+            "sha256": {
+              "type": "string",
+              "pattern": "^[a-f0-9]{64}$"
+            },
+            "stream_index": {
+              "type": "integer",
+              "minimum": 0
+            }
+          }
+        },
+        "provenance": {
+          "type": "object"
+        }
+      }
+    }
+  }
+}

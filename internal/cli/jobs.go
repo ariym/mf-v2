@@ -50,7 +50,9 @@ func apiRequest(ctx context.Context, c *config.Config, method, path string, body
 	if out == nil {
 		return nil
 	}
-	return json.NewDecoder(io.LimitReader(resp.Body, 128<<20)).Decode(out)
+	decoder := json.NewDecoder(io.LimitReader(resp.Body, 128<<20))
+	decoder.UseNumber()
+	return decoder.Decode(out)
 }
 func ensureServer(cmd *cobra.Command, c *config.Config) error {
 	var state process.State
@@ -113,10 +115,16 @@ func addJobCommands(root *cobra.Command, c *config.Config) {
 			if e = apiRequest(cmd.Context(), c, "POST", "/api/v1/jobs", body, &result); e != nil {
 				return e
 			}
-			fmt.Fprintln(cmd.OutOrStdout(), result.ID)
 			if wait {
+				if !jsonOutput(cmd) {
+					fmt.Fprintln(cmd.OutOrStdout(), result.ID)
+				}
 				return waitJobCLI(cmd, c, result.ID)
 			}
+			if jsonOutput(cmd) {
+				return printOutput(cmd, result)
+			}
+			fmt.Fprintln(cmd.OutOrStdout(), result.ID)
 			return nil
 		}}
 		run.Flags().StringVar(&input, "input", "{}", "flow JSON input or @file")
@@ -149,7 +157,7 @@ func addJobCommands(root *cobra.Command, c *config.Config) {
 		if e := apiRequest(cmd.Context(), c, "GET", "/api/v1/jobs?"+q.Encode(), nil, &out); e != nil {
 			return e
 		}
-		return printJSON(cmd.OutOrStdout(), out)
+		return printOutput(cmd, out)
 	}}
 	list.Flags().StringVar(&path, "path", "", "filter by file or directory")
 	list.Flags().StringVar(&state, "state", "", "filter by job state")
@@ -161,7 +169,7 @@ func addJobCommands(root *cobra.Command, c *config.Config) {
 		if e := apiRequest(cmd.Context(), c, "GET", "/api/v1/jobs/"+url.PathEscape(args[0]), nil, &out); e != nil {
 			return e
 		}
-		return printJSON(cmd.OutOrStdout(), out)
+		return printOutput(cmd, out)
 	}})
 	group.AddCommand(&cobra.Command{Use: "wait <id>", Short: "Wait for completion; fail if the job fails or is cancelled", Args: cobra.ExactArgs(1), RunE: func(cmd *cobra.Command, args []string) error { return waitJobCLI(cmd, c, args[0]) }})
 	for _, action := range []string{"cancel", "retry"} {
@@ -173,7 +181,7 @@ func addJobCommands(root *cobra.Command, c *config.Config) {
 			if e := apiRequest(cmd.Context(), c, "POST", "/api/v1/jobs/"+url.PathEscape(args[0])+"/"+action, nil, &out); e != nil {
 				return e
 			}
-			return printJSON(cmd.OutOrStdout(), out)
+			return printOutput(cmd, out)
 		}})
 	}
 	var follow bool
@@ -220,10 +228,12 @@ func waitJobCLI(cmd *cobra.Command, c *config.Config, id string) error {
 			return e
 		}
 		if j.State == "completed" {
-			return printJSON(cmd.OutOrStdout(), j)
+			return printOutput(cmd, j)
 		}
 		if j.State == "failed" || j.State == "cancelled" {
-			_ = printJSON(cmd.OutOrStdout(), j)
+			if err := printOutput(cmd, j); err != nil {
+				return err
+			}
 			return fmt.Errorf("job %s %s: %s", id, j.State, j.Error)
 		}
 		if e := waitPoll(cmd.Context()); e != nil {

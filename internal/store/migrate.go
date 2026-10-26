@@ -70,6 +70,20 @@ var v2Objects = map[string]bool{
 	"table job_metadata": true, "table job_media": true, "table job_modules": true, "table install_journal": true,
 }
 
+const schemaV3 = `
+CREATE TABLE manifest_drafts (
+ id TEXT PRIMARY KEY, name TEXT NOT NULL, document TEXT NOT NULL,
+ created_at TEXT NOT NULL, modified_at TEXT NOT NULL
+);
+CREATE TABLE job_definitions (
+ id TEXT PRIMARY KEY, name TEXT NOT NULL, document TEXT NOT NULL,
+ created_at TEXT NOT NULL, modified_at TEXT NOT NULL
+);
+UPDATE mf_schema_migrations SET version=3;
+`
+
+var v3Objects = map[string]bool{"table manifest_drafts": true, "table job_definitions": true}
+
 // Migrate must be called while holding the database's exclusive server lock.
 // It validates the entire legacy schema before changing anything.
 func Migrate(ctx context.Context, path string) error {
@@ -82,10 +96,13 @@ func Migrate(ctx context.Context, path string) error {
 	if err = db.QueryRowContext(ctx, "SELECT version FROM mf_schema_migrations").Scan(&version); err != nil {
 		return fmt.Errorf("not an mf database: %w", err)
 	}
-	if version == 2 {
+	if version == 3 {
 		return Validate(db)
 	}
-	if err = validateVersion(db, 1); err != nil {
+	if version != 1 && version != 2 {
+		return fmt.Errorf("unsupported schema version %d", version)
+	}
+	if err = validateVersion(db, version); err != nil {
 		return err
 	}
 	tx, err := db.BeginTx(ctx, nil)
@@ -93,7 +110,12 @@ func Migrate(ctx context.Context, path string) error {
 		return err
 	}
 	defer tx.Rollback()
-	if _, err = tx.ExecContext(ctx, schemaV2); err != nil {
+	if version == 1 {
+		if _, err = tx.ExecContext(ctx, schemaV2); err != nil {
+			return err
+		}
+	}
+	if _, err = tx.ExecContext(ctx, schemaV3); err != nil {
 		return err
 	}
 	return tx.Commit()

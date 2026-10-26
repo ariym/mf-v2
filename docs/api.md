@@ -49,3 +49,55 @@ Submission metadata and exact module pins are durable before engine creation; in
 Cancellation is valid for queued/running jobs and prevents resumption; completed/failed/cancelled jobs return 409. Retrying a failed/cancelled job creates a new ID using its saved input and pins. Existing pre-v2 jobs remain readable but have no client submission snapshot for retry. Cancellation and retry of missing jobs return errors; logs return 404 for missing jobs. New client CLI submissions start the local daemon when needed; the HTTP API itself does not start a server.
 
 Job list pagination uses limit 1–1000 and a nonnegative offset. The optional path filter matches canonical file/directory associations. States include `cancelled`; a cancellation request may remain visible as `cancel_requested` until the worker reaches a terminal outcome. Logs are captured for downloaded flows; compiled activities use the server's existing logs. Force-stopping the daemon preserves work instead of setting `cancel_requested`.
+
+## Web workspace API (schema v3)
+
+The standalone `mf-web` application uses HTTP exclusively. Its own Go server streams catalog paths and generates thumbnails/browser proxies; mf continues to own catalog data, module installation, drafts, and durable jobs. `GET /api/v1/capabilities` reports `workspace_version: 1`, `schema_version: 3`, and the mf server's `os`/`arch`.
+
+| Method and path | Result |
+| --- | --- |
+| `GET /api/v1/schema` | `{items:[{name,sql}]}` for catalog tables |
+| `POST /api/v1/query` | Ordered `{items:[{media,segment_id?,start,end}]}` |
+| `GET /api/v1/media/{id}/annotations` | `{segments,tags}`, preserving shared links and JSON Pointers |
+| `GET /api/v1/segments?media_file_id=...` | `{items}` |
+| `GET /api/v1/segments/{id}` | One segment |
+| `POST /api/v1/segments` | Create `{media_file_id,start,end}`; return segment |
+| `PATCH /api/v1/segments/{id}` | Update `{start,end}`; return segment |
+| `DELETE /api/v1/segments/{id}` | Remove segment and orphaned instances |
+| `GET /api/v1/tags?media_file_id=...` | `{items}` with shared links and full values |
+| `POST /api/v1/tags` | Create `{key,version,value,links:[{segment_id,value_pointer}]}` |
+| `PATCH /api/v1/tags/{id}` | Replace schema-validated `{value}` across all links |
+| `DELETE /api/v1/tags/{id}` | Remove instance and all its links |
+| `GET /api/v1/modules/{kind}` | `{items}` containing installed key/version/manifest metadata |
+| `GET /api/v1/hub/{kind}?limit=100&offset=0` | Hub catalog page |
+| `GET /api/v1/hub/{kind}/{key}/versions?limit=100&offset=0` | Hub version history page |
+| `POST /api/v1/modules/{kind}/resolve` | Review exact `{ref:"key@version"}` dependency plan |
+| `POST /api/v1/modules/{kind}/install` | Install exact `{ref}` and dependencies |
+| `POST /api/v1/modules/{kind}/update` | Stage and atomically replace unused versions for `{ref}` |
+| `DELETE /api/v1/modules/{kind}/{key}` | Remove an unused installed entity |
+| `GET /api/v1/drafts/{kind}` | `{items}` of saved documents |
+| `GET /api/v1/drafts/{kind}/{id}` | One document |
+| `POST /api/v1/drafts/{kind}` | Create `{name,document}` |
+| `PUT /api/v1/drafts/{kind}/{id}` | Replace `{name,document}` |
+| `DELETE /api/v1/drafts/{kind}/{id}` | Remove document |
+| `POST /api/v1/drafts/jobs/{id}/run` | HTTP 202 `{id}` for an independent execution |
+| `GET /api/v1/jobs/{id}/submission` | Saved `{flow,data:{kind:"raw"},input,original_paths}` for copying a run |
+| `POST /api/v1/manifests/validate` | Validate `{kind,manifest}`; return normalized manifest and dependencies |
+
+Module kinds are `tagtypes`, `flows`, and `programs`. Manifest payloads retain the hub's wire spelling (`tags`), allowing direct export; the UI labels these dependencies as tag types. Operations reuse mf's download credentials and installation lock. Replacement checks run before downloads and again in the commit transaction. Changed immutable manifests with the same version are rejected; references from tags, dependent manifests, or unfinished job pins block replacement. Downloads finish before old registrations change, and the installation journal recovers interrupted filesystem work.
+
+Draft kinds are `manifests` and `jobs`. Document records contain `id`, `name`, `document` (text), `created_at`, and `modified_at`. Draft text may contain incomplete JSON; validation/execution rejects invalid content without changing runs or installed entities. Names are required (maximum 256 characters); documents and request bodies are limited to 1 MiB. New workspace request bodies reject unknown/duplicate fields and trailing JSON.
+
+A selection query supplies `mode: "media"` or `"segments"` and exactly one of `sql` or `filters`. Filters support `media_ids`, `tag_type`, and `value` (case-insensitive substring in stored JSON). Media SQL must return positive catalog `media_file_id` values. Segment SQL additionally returns `start` and `end` timecode strings and may include `segment_id`. Every range is validated against the catalog duration. No filesystem probe occurs; returned paths/metadata come from mf. Order and duplicates are preserved. Empty results return an empty array; more than 1,000 results fail explicitly. SQL runs through a single-statement SELECT/WITH validator on a read-only, query-only SQLite connection with a five-second timeout.
+
+```json
+{"mode":"segments","sql":"SELECT media_file_id,id AS segment_id,start,end FROM segments ORDER BY media_file_id,length(start),start,id"}
+```
+
+A saved job document has this structure:
+
+```json
+{"flow":"transcribe@1","data":{"kind":"media","media_ids":[12,13]},"input":{"options":{}}}
+```
+
+Data kinds are `media` (`media_ids`), `paths` (`paths`), `sql` (`sql` returning `media_file_id`), and `raw` (pass the `input` object directly). SQL resolves and deduplicates media when Run is clicked; catalog paths are then submitted using mf's existing file-oriented convention. Submitted runs retain their own normalized input and exact module pins. Editing the saved definition does not modify any prior run. The header's future search UI does not call these query endpoints.

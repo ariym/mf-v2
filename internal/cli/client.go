@@ -20,11 +20,6 @@ import (
 	"github.com/spf13/cobra"
 )
 
-func printJSON(out io.Writer, value any) error {
-	e := json.NewEncoder(out)
-	e.SetIndent("", "  ")
-	return e.Encode(value)
-}
 func jsonInput(text string) (json.RawMessage, error) {
 	raw := []byte(text)
 	if len(text) > 0 && text[0] == '@' {
@@ -67,7 +62,7 @@ func addClientCommands(root *cobra.Command, c *config.Config, configPath *string
 		if e = store.Migrate(cmd.Context(), c.SQLitePath); e != nil {
 			return e
 		}
-		fmt.Fprintln(cmd.OutOrStdout(), "Database schema is current (v2)")
+		fmt.Fprintln(cmd.OutOrStdout(), "Database schema is current (v3)")
 		return nil
 	}}
 	root.AddCommand(migrate)
@@ -100,20 +95,15 @@ func addHubCommands(root *cobra.Command, c *config.Config, configPath *string) {
 	group.PersistentFlags().StringVar(&hubURL, "url", "", "override hub URL")
 	client := func() hub.Client { return hub.Client{URL: c.HubURL, Token: os.Getenv("MF_HUB_ADMIN_TOKEN")} }
 	var limit, offset int
-	var listJSON bool
 	list := &cobra.Command{Use: "list <tagtypes|flows|programs>", Short: "List latest definitions", Args: cobra.ExactArgs(1), RunE: func(cmd *cobra.Command, args []string) error {
 		p, e := client().List(cmd.Context(), args[0], "", limit, offset)
 		if e != nil {
 			return e
 		}
-		if listJSON {
-			return printJSON(cmd.OutOrStdout(), hub.ClientView(p))
-		}
-		return printHubTable(cmd.OutOrStdout(), args[0], p)
+		return printHubPage(cmd, args[0], p)
 	}}
 	list.Flags().IntVar(&limit, "limit", 100, "page size (1–1000)")
 	list.Flags().IntVar(&offset, "offset", 0, "page offset")
-	list.Flags().BoolVar(&listJSON, "json", false, "emit structured JSON instead of a table")
 	group.AddCommand(list)
 	group.AddCommand(hubBrowseCommand(c))
 	show := &cobra.Command{Use: "show <kind> <key[@version]>", Short: "Show a latest or exact definition", Args: cobra.ExactArgs(2), RunE: func(cmd *cobra.Command, args []string) error {
@@ -125,7 +115,7 @@ func addHubCommands(root *cobra.Command, c *config.Config, configPath *string) {
 		if e != nil {
 			return e
 		}
-		return printJSON(cmd.OutOrStdout(), hub.ClientView(record.Value))
+		return printOutput(cmd, hub.ClientView(record.Value))
 	}}
 	group.AddCommand(show)
 	var versionLimit, versionOffset int
@@ -134,7 +124,7 @@ func addHubCommands(root *cobra.Command, c *config.Config, configPath *string) {
 		if e != nil {
 			return e
 		}
-		return printJSON(cmd.OutOrStdout(), hub.ClientView(p))
+		return printHubPage(cmd, args[0], p)
 	}}
 	versions.Flags().IntVar(&versionLimit, "limit", 100, "page size")
 	versions.Flags().IntVar(&versionOffset, "offset", 0, "page offset")
@@ -149,7 +139,7 @@ func addHubCommands(root *cobra.Command, c *config.Config, configPath *string) {
 		if e != nil {
 			return e
 		}
-		return printJSON(cmd.OutOrStdout(), hub.ClientView(p))
+		return printOutput(cmd, hub.ClientView(p))
 	}}
 	resolve.Flags().StringVar(&osName, "os", "", "target OS (default: current)")
 	resolve.Flags().StringVar(&arch, "arch", "", "target architecture (default: current)")
@@ -163,14 +153,14 @@ func addHubCommands(root *cobra.Command, c *config.Config, configPath *string) {
 		if e != nil {
 			return e
 		}
-		return printJSON(cmd.OutOrStdout(), hub.ClientView(record.Value))
+		return printOutput(cmd, hub.ClientView(record.Value))
 	}})
 	group.AddCommand(&cobra.Command{Use: "health", Short: "Check hub readiness", Args: cobra.NoArgs, RunE: func(cmd *cobra.Command, _ []string) error {
 		out, e := client().Health(cmd.Context())
 		if e != nil {
 			return e
 		}
-		return printJSON(cmd.OutOrStdout(), out)
+		return printOutput(cmd, out)
 	}})
 	root.AddCommand(group)
 }
@@ -188,13 +178,13 @@ func addModuleCommands(root *cobra.Command, c *config.Config) {
 				if e != nil {
 					return e
 				}
-				return printJSON(cmd.OutOrStdout(), v)
+				return printOutput(cmd, v)
 			}
 			v, e := s.Modules(cmd.Context(), kind)
 			if e != nil {
 				return e
 			}
-			return printJSON(cmd.OutOrStdout(), hub.ClientView(v))
+			return printOutput(cmd, hub.ClientView(v))
 		}})
 		group.AddCommand(&cobra.Command{Use: "show <key[@version]>", Short: "Show an installed entity", Args: cobra.ExactArgs(1), RunE: func(cmd *cobra.Command, args []string) error {
 			ref, e := hub.ParseRef(kind, args[0])
@@ -211,7 +201,7 @@ func addModuleCommands(root *cobra.Command, c *config.Config) {
 				if e != nil {
 					return e
 				}
-				return printJSON(cmd.OutOrStdout(), hub.ClientView(v))
+				return printOutput(cmd, hub.ClientView(v))
 			}
 			v, e := s.Module(cmd.Context(), kind, ref.Identifier)
 			if e != nil {
@@ -220,7 +210,7 @@ func addModuleCommands(root *cobra.Command, c *config.Config) {
 			if ref.Version > 0 && ref.Version != v.Version {
 				return fmt.Errorf("requested version is not installed")
 			}
-			return printJSON(cmd.OutOrStdout(), hub.ClientView(v))
+			return printOutput(cmd, hub.ClientView(v))
 		}})
 		var urlOverride string
 		install := &cobra.Command{Use: "install <key[@version]>", Short: "Install exact compatible hub entities and dependencies", Args: cobra.ExactArgs(1), RunE: func(cmd *cobra.Command, args []string) error {
@@ -241,7 +231,7 @@ func addModuleCommands(root *cobra.Command, c *config.Config) {
 			if e != nil {
 				return e
 			}
-			return printJSON(cmd.OutOrStdout(), hub.ClientView(p))
+			return printOutput(cmd, hub.ClientView(p))
 		}}
 		install.Flags().StringVar(&urlOverride, "hub-url", "", "override hub URL")
 		group.AddCommand(install)
@@ -274,7 +264,7 @@ func addModuleCommands(root *cobra.Command, c *config.Config) {
 				if e = s.AddTagType(cmd.Context(), record.Value.(hub.TagType), "local"); e != nil {
 					return e
 				}
-				return printJSON(cmd.OutOrStdout(), hub.ClientView(record.Value))
+				return printOutput(cmd, hub.ClientView(record.Value))
 			}})
 		} else {
 			group.AddCommand(&cobra.Command{Use: "path <key>", Short: "Print the installed executable's absolute path", Args: cobra.ExactArgs(1), RunE: func(cmd *cobra.Command, args []string) error {

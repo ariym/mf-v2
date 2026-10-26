@@ -29,6 +29,7 @@ func New(in io.Reader, out, errOut io.Writer) *cobra.Command {
 	root.SetErr(errOut)
 	root.CompletionOptions.DisableDefaultCmd = true
 	root.PersistentFlags().StringVar(&configPath, "config", "", "runtime config path (default: ./mf.yaml)")
+	root.PersistentFlags().Bool("json", false, "output raw JSON instead of formatted lists or tables")
 	root.PersistentPreRunE = func(cmd *cobra.Command, args []string) error {
 		var e error
 		c, e = config.Load(configPath)
