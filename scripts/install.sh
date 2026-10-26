@@ -1,5 +1,5 @@
 #!/bin/sh
-# Install the latest stable GitHub release, or the tag selected by MF_VERSION.
+# Install the latest stable release, or an exact opt-in testing release.
 set -eu
 
 main() {
@@ -28,7 +28,15 @@ main() {
     asset="mf-$platform-$architecture"
     release_version=${MF_VERSION:-latest}
     if [ "$release_version" != latest ]; then
-        python3 -c 'import re, sys; sys.exit(0 if re.fullmatch(r"v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)", sys.argv[1]) else "mf installer: MF_VERSION must be a stable tag such as v0.1.0.")' "$release_version"
+        python3 - "$release_version" "${MF_TESTING:-0}" "$platform" "$architecture" <<'PY'
+import re
+import sys
+tag, testing, platform, architecture = sys.argv[1:]
+stable = re.fullmatch(r"v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)", tag)
+native_testing = re.fullmatch(rf"testing-{platform}-{architecture}-[0-9]{{20}}-g[0-9a-f]{{40}}", tag)
+if not stable and not (testing == "1" and native_testing):
+    sys.exit("mf installer: MF_VERSION must be a stable tag, or an exact native testing tag with MF_TESTING=1.")
+PY
     fi
     GH_TOKEN=${GH_TOKEN:-${GITHUB_TOKEN:-}}
     if [ -z "$GH_TOKEN" ] && command -v gh >/dev/null 2>&1; then
@@ -52,21 +60,24 @@ main() {
 
     # Resolve both assets from one release response so a new release appearing
     # during installation cannot mix a binary and checksum from different tags.
-    python3 - "$temporary_dir" "$asset" "$repository" "$release_version" <<'PY'
+    python3 - "$temporary_dir" "$asset" "$repository" "$release_version" "${MF_TESTING:-0}" <<'PY'
 import json
 from pathlib import Path
 import re
 import sys
 
-folder, asset, repository, requested_version = sys.argv[1:]
+folder, asset, repository, requested_version, testing = sys.argv[1:]
 folder = Path(folder)
 try:
     release = json.loads((folder / "release.json").read_text())
     version = release.get("tag_name", "")
-    if not re.fullmatch(r"v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)", version):
-        raise ValueError("release must have a stable vMAJOR.MINOR.PATCH tag")
-    if release.get("draft") or release.get("prerelease"):
-        raise ValueError("release must be published and stable")
+    is_testing = (testing == "1" and requested_version == version and
+                  re.fullmatch(rf"testing-{asset[3:]}-[0-9]{{20}}-g[0-9a-f]{{40}}", version))
+    if not is_testing and not re.fullmatch(r"v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)", version):
+        raise ValueError("release must have a stable vMAJOR.MINOR.PATCH tag or an explicitly selected testing tag")
+    if release.get("draft") or bool(release.get("prerelease")) != bool(is_testing):
+        raise ValueError("testing release must be published as a prerelease" if is_testing
+                         else "release must be published and stable")
     if requested_version != "latest" and version != requested_version:
         raise ValueError(f"requested {requested_version}, received {version}")
     assets = {entry["name"]: entry for entry in release["assets"]}

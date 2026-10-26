@@ -18,18 +18,29 @@ import (
 
 var Version = "0.1.0"
 
+// TestingRelease identifies an opt-in native build without changing schema compatibility.
+var TestingRelease string
+
+func DisplayVersion() string {
+	if TestingRelease != "" {
+		return Version + " (" + TestingRelease + ")"
+	}
+	return Version
+}
+
 const MissingMessage = "No local mf.yaml file found. include flag ‘--config=/path/to/mf.yaml’ or ‘run mf init’ to create a new mf.yaml in the current directory."
 
 type Config struct {
-	AppName     string       `yaml:"app_name" json:"app_name"`
-	MFVersion   string       `yaml:"mf_version" json:"mf_version"`
-	ServerIP    string       `yaml:"server_ip" json:"server_ip"`
-	ServerPort  int          `yaml:"server_port" json:"server_port"`
-	SQLitePath  string       `yaml:"sqlite_path" json:"sqlite_path"`
-	HubURL      string       `yaml:"hub_url" json:"hub_url"`
-	ModulesPath string       `yaml:"modules_path" json:"modules_path"`
-	SQLToFFmpeg RenderConfig `yaml:"sql_to_ffmpeg" json:"sql_to_ffmpeg"`
-	Path        string       `yaml:"-" json:"-"`
+	AppName       string       `yaml:"app_name" json:"app_name"`
+	MFVersion     string       `yaml:"mf_version" json:"mf_version"`
+	TestingBranch bool         `yaml:"testing_branch" json:"testing_branch"`
+	ServerIP      string       `yaml:"server_ip" json:"server_ip"`
+	ServerPort    int          `yaml:"server_port" json:"server_port"`
+	SQLitePath    string       `yaml:"sqlite_path" json:"sqlite_path"`
+	HubURL        string       `yaml:"hub_url" json:"hub_url"`
+	ModulesPath   string       `yaml:"modules_path" json:"modules_path"`
+	SQLToFFmpeg   RenderConfig `yaml:"sql_to_ffmpeg" json:"sql_to_ffmpeg"`
+	Path          string       `yaml:"-" json:"-"`
 }
 
 func Defaults() Config {
@@ -40,6 +51,35 @@ func ConfigPath(path string) (string, error) {
 		path = "mf.yaml"
 	}
 	return filepath.Abs(path)
+}
+
+// UpdateTestingBranch reads only the update preference. Updating must work even
+// when the database is unavailable or mf_version needs a newer executable.
+func UpdateTestingBranch(path string) (bool, error) {
+	explicit := path != ""
+	abs, err := ConfigPath(path)
+	if err != nil {
+		return false, err
+	}
+	b, err := os.ReadFile(abs)
+	if os.IsNotExist(err) && !explicit {
+		return false, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("read config %s: %w", abs, err)
+	}
+	var preference struct {
+		TestingBranch bool `yaml:"testing_branch"`
+	}
+	d := yaml.NewDecoder(bytes.NewReader(b))
+	if err = d.Decode(&preference); err != nil {
+		return false, fmt.Errorf("parse config %s: %w", abs, err)
+	}
+	var extra any
+	if err = d.Decode(&extra); err != io.EOF {
+		return false, fmt.Errorf("parse config %s: expected one YAML document", abs)
+	}
+	return preference.TestingBranch, nil
 }
 func Load(path string) (Config, error) {
 	explicit := path != ""

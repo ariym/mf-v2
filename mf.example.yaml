@@ -1,5 +1,6 @@
 app_name: mf-processor
 mf_version: 0.1.0
+testing_branch: false
 server_ip: localhost
 server_port: 11747
 sqlite_path: mf.db

@@ -43,6 +43,7 @@ class InstallTests(unittest.TestCase):
                                 TMPDIR=str(self.temporary_downloads), MF_TEST_ROOT=str(self.root),
                                 MF_TEST_OS="Linux", MF_TEST_ARCH="x86_64")
         self.environment.pop("MF_VERSION", None)
+        self.environment.pop("MF_TESTING", None)
         self.environment.pop("GITHUB_TOKEN", None)
         self.environment.pop("ZDOTDIR", None)
         self.executable("gh", "#!/bin/sh\nexit 1\n")
@@ -55,7 +56,7 @@ with (root / "requests.jsonl").open("a") as log:
 if os.environ.get("MF_TEST_DOWNLOAD_FAILURE"):
     sys.exit(22)
 url = args[-1]
-if url.endswith("/releases/latest") or url.endswith("/releases/tags/v0.1.0"):
+if url.endswith("/releases/latest") or "/releases/tags/" in url:
     source = root / "release.json"
 elif url.endswith("/assets/101"):
     source = root / "binary"
@@ -170,6 +171,42 @@ pathlib.Path(args[args.index("-o") + 1]).write_bytes(source.read_bytes())
         self.assertIn("missing asset mf-linux-amd64", result.stderr)
         self.assertFalse(self.destination.exists())
         self.assert_clean()
+
+    def test_testing_release_requires_explicit_native_opt_in(self):
+        tag = "testing-linux-amd64-20261026120000000000-g" + "a" * 40
+        release_path = self.root / "release.json"
+        release = json.loads(release_path.read_text())
+        release.update(tag_name=tag, prerelease=True)
+        release_path.write_text(json.dumps(release))
+        self.environment["MF_VERSION"] = tag
+        result = self.run_installer()
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("MF_TESTING=1", result.stderr)
+        self.assertFalse(self.destination.exists())
+        self.environment["MF_TESTING"] = "1"
+        result = self.run_installer()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("Installed mf " + tag, result.stdout)
+        self.assertEqual((self.destination / "mf").read_bytes(), BINARY)
+        self.assert_clean()
+
+    def test_default_installer_rejects_testing_even_with_opt_in(self):
+        release_path = self.root / "release.json"
+        release = json.loads(release_path.read_text())
+        release.update(tag_name="testing-linux-amd64-20261026120000000000-g" + "a" * 40,
+                       prerelease=True)
+        release_path.write_text(json.dumps(release))
+        self.environment["MF_TESTING"] = "1"
+        result = self.run_installer()
+        self.assertNotEqual(result.returncode, 0)
+        self.assertFalse(self.destination.exists())
+
+    def test_testing_release_cannot_install_another_platform(self):
+        self.environment.update(MF_TESTING="1", MF_VERSION="testing-darwin-arm64-20261026120000000000-g" + "a" * 40)
+        result = self.run_installer()
+        self.assertNotEqual(result.returncode, 0)
+        self.assertFalse(self.log.exists())
+        self.assertFalse(self.destination.exists())
 
     def test_download_failure_explains_private_access(self):
         self.environment["MF_TEST_DOWNLOAD_FAILURE"] = "1"

@@ -106,3 +106,53 @@ curl ... | MF_VERSION=v0.1.1 MF_INSTALL_DIR=/path/to/installation sh
 The actual command contains a full installer URL pinned to the reported tag and the resolved executable directory. Paths containing spaces or shell punctuation are quoted. It refers to the same credential source used for the check (`GH_TOKEN`, `GITHUB_TOKEN`, or `gh`) without printing the token itself. Copy and run the command to install. No config or database is needed for the check.
 
 The installer resolves executable and checksum assets from one release, verifies SHA-256, and replaces `mf` atomically in the destination directory. Failed downloads or checksum verification preserve the existing executable. Optional `MF_VERSION=v0.1.1` selects an exact stable release; omitting it selects the latest. Restart a running server/daemon after updating so its process uses the new binary.
+
+## Local testing releases
+
+The `testing` branch can publish directly from your computer. GitHub Actions is not part of this publishing path. A local `post-commit` hook pushes the committed snapshot to `origin/testing`, builds only the host OS/architecture, and publishes a GitHub prerelease containing that executable, its SHA-256 checksum, and the installer. On an Apple Silicon Mac this produces `mf-darwin-arm64`; Linux/Intel clients need a publication from their own platform before testing updates are available.
+
+Set up the publishing checkout once, after these scripts and CLI changes have been committed:
+
+```sh
+gh auth login                       # Account needs repository Contents write access
+git switch -c testing                # Use git switch testing if it already exists
+make testing-hooks                  # Installs this checkout's post-commit hook
+make testing-release                # Publishes the current commit for the first time
+```
+
+Go, Git, Python 3, `tar`, and GitHub CLI must be on this terminal's `PATH`. The remote must be `origin` for `ariym/mf-v2`, and repository rules must permit pushing `testing` and creating release tags. An existing post-commit hook is preserved; the setup command explains how to add the publisher to it. Hooks are local to the checkout and are not installed by cloning the repository.
+
+Subsequent `git commit` calls on `testing` build and publish synchronously, so the terminal shows failures and the time to publication. The commit remains saved if publishing fails; retry `make testing-release`. Set `MF_SKIP_TESTING_RELEASE=1 git commit ...` to skip one publication. To disable automatic publication, remove only the installed mf hook (or its call from your custom hook). Merges performed by `git merge` may need `make testing-release` afterward because Git has a separate post-merge hook.
+
+The build uses `git archive` of the commit, so unstaged and untracked files cannot enter the release. Stable ancestor tags supply the compatibility version (at least the source's declared version); `mf version` also shows the testing tag. Build tags look like `testing-darwin-arm64-20261026120000000000-g<FULL_COMMIT_SHA>`. They are unique per commit/platform, do not start with `v`, and are published with `prerelease=true` and `latest=false`. The stable updater continues using GitHub's stable `releases/latest` endpoint. Testing branch/tag pushes skip the general Go workflow; pull requests still run CI.
+
+Before compilation, the script checks the repository, fetches tags, pushes the testing commit, and checks for an existing release. After compilation, it only hashes the executable, uploads the three files into a draft, publishes it, and confirms it through GitHub's release API. The target is **under 30 seconds after compilation**; the script prints the measured time and reports when it exceeds the target. Upload bandwidth, API latency and GitHub availability prevent a hard timing guarantee. Warm Go caches speed up compilation; no test suite or four-platform build runs in this path. Run `make test` and `make vet` separately when needed.
+
+On each testing client, add this top-level field to its existing `mf.yaml`:
+
+```yaml
+testing_branch: true
+```
+
+Then run:
+
+```sh
+mf update
+# Or, from another directory:
+mf --config /path/to/mf.yaml update
+```
+
+The updater reads the preference without validating runtime version compatibility or opening a database. It finds the first published testing prerelease for this platform with both executable and checksum assets, skipping drafts and incomplete releases. It requests API cache revalidation and paginates when necessary. If none exists it reports that explicitly. The printed install command opts in with `MF_TESTING=1` and pins the exact tag, installer source, and existing installation directory. Copy and run it to install, then restart running mf processes. Running `mf update` itself remains a check that prints instructions.
+
+Clients need a binary containing this channel support before adding the new YAML field: older versions reject unknown config fields and only check stable releases. Either distribute one stable release containing these changes first, or bootstrap a native testing release directly using the exact tag printed by the publisher:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/ariym/mf-v2/testing/scripts/install.sh \
+  | MF_TESTING=1 MF_VERSION='testing-darwin-arm64-<TIMESTAMP>-g<FULL_COMMIT_SHA>' sh
+```
+
+Replace the example tag with the complete published tag (including its 20-digit timestamp); use the matching platform. Set `MF_INSTALL_DIR` too if the client is installed somewhere other than `~/.local/bin`.
+
+Removing the flag or setting it to `false` makes `mf update` offer stable again, including when testing and stable share the same compatibility version. Without a local config, the updater also selects stable. The installer accepts testing tags only with an exact native tag and `MF_TESTING=1`; the default installer keeps selecting stable.
+
+This is an update-channel preference, not access control. Published prerelease assets in this public repository can be downloaded by anyone through GitHub. Enforcing download access would require authenticated private distribution. GitHub documents [prerelease/latest controls](https://cli.github.com/manual/gh_release_create) and [release API visibility](https://docs.github.com/en/rest/releases/releases).

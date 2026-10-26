@@ -9,7 +9,7 @@ All commands accept `--config /path/to/mf.yaml`; otherwise configuration is read
 | `mf init [-y]` | Create config and a new schema-v4 database; `-y` accepts defaults |
 | `mf migrate` | Upgrade a validated v1 database with the server stopped |
 | `mf version` | Print executable version |
-| `mf update` | Check GitHub for a newer release and print a curl command to update the executable in its installation directory; works without config |
+| `mf update` | Check GitHub and print a pinned install command; `testing_branch: true` in the selected config opts into native testing releases, otherwise stable; works without config or database |
 | `mf add <file-or-directory>` | Probe/import synchronously; directories recurse |
 | `mf server start` | Run the API and worker in this terminal |
 | `mf daemon start` | Start a detached server |

@@ -1,4 +1,4 @@
-.PHONY: build dist clean test race vet formats
+.PHONY: build dist clean test race vet formats testing-hooks testing-release
 
 export VERSION
 
@@ -6,6 +6,10 @@ build:
 	sh scripts/build.sh local
 dist:
 	sh scripts/build.sh dist
+testing-hooks:
+	python3 scripts/testing_release.py --install-hook
+testing-release:
+	python3 scripts/testing_release.py
 clean:
 	rm -rf dist
 test:

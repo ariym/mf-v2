@@ -23,7 +23,7 @@ import (
 func New(in io.Reader, out, errOut io.Writer) *cobra.Command {
 	var configPath string
 	var c config.Config
-	root := &cobra.Command{Use: "mf", Short: "Local media catalog and durable workflow server", Version: config.Version, SilenceUsage: true, SilenceErrors: true}
+	root := &cobra.Command{Use: "mf", Short: "Local media catalog and durable workflow server", Version: config.DisplayVersion(), SilenceUsage: true, SilenceErrors: true}
 	root.SetIn(in)
 	root.SetOut(out)
 	root.SetErr(errOut)
@@ -49,7 +49,7 @@ func New(in io.Reader, out, errOut io.Writer) *cobra.Command {
 		return initialize(configPath, yes, cmd.InOrStdin(), cmd.OutOrStdout())
 	}
 	root.AddCommand(initCmd)
-	version := &cobra.Command{Use: "version", Short: "Print executable version", Args: cobra.NoArgs, PersistentPreRunE: func(*cobra.Command, []string) error { return nil }, Run: func(cmd *cobra.Command, _ []string) { fmt.Fprintln(cmd.OutOrStdout(), config.Version) }}
+	version := &cobra.Command{Use: "version", Short: "Print executable version", Args: cobra.NoArgs, PersistentPreRunE: func(*cobra.Command, []string) error { return nil }, Run: func(cmd *cobra.Command, _ []string) { fmt.Fprintln(cmd.OutOrStdout(), config.DisplayVersion()) }}
 	root.AddCommand(version)
 	root.AddCommand(newUpdateCommand())
 	add := &cobra.Command{Use: "add <file-or-directory>", Short: "Recursively probe and import local media", Args: cobra.ExactArgs(1), RunE: func(cmd *cobra.Command, args []string) error {

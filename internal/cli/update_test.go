@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"os"
@@ -23,8 +24,17 @@ func (f updateTransport) RoundTrip(r *http.Request) (*http.Response, error) { re
 
 func updateFixture(t *testing.T, body string, status int, executable string) (string, error) {
 	t.Helper()
+	return updateChannelFixture(t, body, status, executable, false)
+}
+
+func updateChannelFixture(t *testing.T, body string, status int, executable string, testing bool, args ...string) (string, error) {
+	t.Helper()
 	client := &http.Client{Transport: updateTransport(func(r *http.Request) (*http.Response, error) {
-		if r.URL.String() != releaseAPI || r.Header.Get("Accept") != "application/vnd.github+json" {
+		endpoint := releaseAPI
+		if testing {
+			endpoint = releasesAPI + "?per_page=100&page=1"
+		}
+		if r.URL.String() != endpoint || r.Header.Get("Accept") != "application/vnd.github+json" || r.Header.Get("Cache-Control") != "no-cache" {
 			t.Errorf("unexpected release request: %s %v", r.URL, r.Header)
 		}
 		if got := r.Header.Get("Authorization"); got != "Bearer fixture-secret" {
@@ -41,9 +51,108 @@ func updateFixture(t *testing.T, body string, status int, executable string) (st
 	root.AddCommand(updateCommand(client, func() (string, error) { return executable, nil }))
 	var out bytes.Buffer
 	root.SetOut(&out)
-	root.SetArgs([]string{"update"})
+	root.SetArgs(append([]string{"update"}, args...))
 	err := root.ExecuteContext(context.Background())
 	return out.String(), err
+}
+
+func nativeTestingTag() string {
+	return "testing-" + runtime.GOOS + "-" + runtime.GOARCH + "-20261026120000000000-g" + strings.Repeat("a", 40)
+}
+
+func testingReleaseBody(tag string) string {
+	var release map[string]any
+	_ = json.Unmarshal([]byte(releaseBody(tag, true)), &release)
+	release["prerelease"] = true
+	raw, _ := json.Marshal(release)
+	return string(raw)
+}
+
+func TestUpdateTestingOptInAndIdentity(t *testing.T) {
+	t.Setenv("GH_TOKEN", "fixture-secret")
+	dir := t.TempDir()
+	t.Chdir(dir)
+	binary := filepath.Join(dir, "mf")
+	if err := os.WriteFile(binary, []byte("old binary"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(dir, "custom.yaml")
+	// The update check must not require compatible runtime config or a database.
+	if err := os.WriteFile(path, []byte("testing_branch: true\nmf_version: 99.0.0\nsqlite_path: /unavailable/mf.db\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	tag := nativeTestingTag()
+	body := "[" + releaseBody("v99.0.0", true) + "," + testingReleaseBody(tag) + "]"
+	previous := config.TestingRelease
+	t.Cleanup(func() { config.TestingRelease = previous })
+	for _, installed := range []string{"", strings.Replace(tag, "-2026", "-2025", 1), tag} {
+		config.TestingRelease = installed
+		out, err := updateChannelFixture(t, body, 200, binary, true, "--config", path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if installed == tag {
+			if out != "Latest Version Installed.\n" {
+				t.Fatalf("unexpected output: %s", out)
+			}
+		} else if !strings.Contains(out, "?ref="+tag) || !strings.Contains(out, "MF_TESTING=1 MF_VERSION="+tag) {
+			t.Fatalf("testing command is not explicitly opted in and pinned: %s", out)
+		}
+	}
+}
+
+func TestUpdateTestingSkipsUnusableReleasesAndPaginates(t *testing.T) {
+	tag := nativeTestingTag()
+	wrongPlatform := strings.Replace(tag, "testing-"+runtime.GOOS, "testing-windows", 1)
+	draft := strings.Replace(testingReleaseBody(tag), `"prerelease":true`, `"prerelease":true,"draft":true`, 1)
+	missing := `{"tag_name":"` + tag + `","prerelease":true}`
+	page := 0
+	client := &http.Client{Transport: updateTransport(func(r *http.Request) (*http.Response, error) {
+		page++
+		if r.URL.Query().Get("page") != fmt.Sprint(page) {
+			t.Errorf("unexpected page: %s", r.URL)
+		}
+		body := "[" + testingReleaseBody(wrongPlatform) + "," + draft + "," + missing + "," + releaseBody(tag, true) + "]"
+		header := make(http.Header)
+		if page == 1 {
+			header.Set("Link", `<https://api.github.com/repos/ariym/mf-v2/releases?page=2>; rel="next"`)
+		} else {
+			body = "[" + testingReleaseBody(tag) + "]"
+		}
+		return &http.Response{StatusCode: 200, Header: header, Body: io.NopCloser(strings.NewReader(body))}, nil
+	})}
+	release, err := latestTestingRelease(context.Background(), client, "")
+	if err != nil || release.Tag != tag || page != 2 {
+		t.Fatalf("release=%+v pages=%d err=%v", release, page, err)
+	}
+}
+
+func TestUpdateTestingDoesNotFallbackToStable(t *testing.T) {
+	t.Setenv("GH_TOKEN", "fixture-secret")
+	t.Chdir(t.TempDir())
+	if err := os.WriteFile("mf.yaml", []byte("testing_branch: true\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	out, err := updateChannelFixture(t, "["+releaseBody("v99.0.0", true)+"]", 200, "unused", true)
+	if err == nil || !strings.Contains(err.Error(), "no published testing release") || out != "" {
+		t.Fatalf("out=%q err=%v", out, err)
+	}
+}
+
+func TestUpdateOptOutReturnsFromTestingToStable(t *testing.T) {
+	t.Setenv("GH_TOKEN", "fixture-secret")
+	t.Chdir(t.TempDir())
+	before, beforeTag := config.Version, config.TestingRelease
+	t.Cleanup(func() { config.Version, config.TestingRelease = before, beforeTag })
+	config.Version, config.TestingRelease = "0.1.10", nativeTestingTag()
+	binary := filepath.Join(t.TempDir(), "mf")
+	if err := os.WriteFile(binary, []byte("old"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	out, err := updateFixture(t, releaseBody("v0.1.10", true), 200, binary)
+	if err != nil || !strings.Contains(out, "MF_VERSION=v0.1.10") || strings.Contains(out, "MF_TESTING") {
+		t.Fatalf("out=%q err=%v", out, err)
+	}
 }
 
 func releaseBody(tag string, assets bool) string {

@@ -25,7 +25,7 @@ The command becomes available after this installer is pushed to `release` and th
 - `mf-darwin-amd64` and `mf-darwin-arm64` for macOS.
 - `mf-linux-amd64` and `mf-linux-arm64` for Linux.
 
-Each executable has a corresponding `.sha256` file. Other branch pushes and pull requests run CI. Explicit stable tags such as `v0.2.0` can also publish releases to start a new minor or major version. See [release setup](docs/releases.md) for GitHub settings, branch creation, and installation examples.
+Each executable has a corresponding `.sha256` file. Other branch pushes and pull requests run CI, except local `testing` publications. Explicit stable tags such as `v0.2.0` can also publish releases to start a new minor or major version. See [release setup](docs/releases.md) for GitHub settings, branch creation, and installation examples.
 
 Run `mf update` from any directory to check for an update without requiring local initialization:
 
@@ -34,6 +34,8 @@ Latest Version Installed.
 ```
 
 When a newer version exists, it prints `New Update Available (0.1.1)!` followed by a copyable curl command. That command installs the exact reported version into the directory containing the running executable, resolving symlinks; it does not depend on your current working directory. The check itself only prints instructions. Public releases require no authentication. Restart any running mf server/daemon after installing to use the new executable.
+
+For fast native testing builds, add `testing_branch: true` to your `mf.yaml`. `mf update` then offers published testing builds for your OS and architecture. Developers can run `make testing-hooks` once to build and publish locally after each commit on `testing`; see [local testing releases](docs/releases.md#local-testing-releases). Stable remains the default when the flag is absent or false.
 
 ## Build from source
 
@@ -93,6 +95,7 @@ mf --config=/path/to/new/mf.yaml init -y
 ```yaml
 app_name: mf-processor
 mf_version: 0.1.0
+testing_branch: false
 server_ip: localhost
 server_port: 11747
 sqlite_path: mf.db
